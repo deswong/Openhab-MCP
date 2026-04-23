@@ -119,7 +119,8 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
               state: { type: 'string', description: 'State equality filter (used by: all)' },
               includeMetadata: {
                 type: 'boolean',
-                description: 'Include full metadata in results (used by: all). Default false to reduce token usage.',
+                description:
+                  'Include full metadata in results (used by: all). Default false to reduce token usage.',
               },
             },
             required: ['action'],
@@ -155,7 +156,11 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         {
           name: 'manage_item',
           description:
-            'Modify items. action: create_or_update, delete, update_state, add_tag, remove_tag, set_metadata, remove_metadata.',
+            'Modify items. action: create_or_update, delete, update_state, add_tag, remove_tag, set_metadata, remove_metadata.' +
+            ' WARNING: Do NOT use create_or_update for semantic model fixes (parentage, hierarchy).' +
+            ' Use remediate action=semantic_fix instead. create_or_update safely merges existing groupNames and tags on update, but semantic relationships (hasLocation, isPointOf, isPartOf) must go through semantic_fix.' +
+            ' WARNING: Do NOT use create_or_update for semantic model fixes (parentage, hierarchy).' +
+            ' Use remediate action=semantic_fix instead. create_or_update safely merges existing groupNames and tags on update, but semantic relationships (hasLocation, isPointOf, isPartOf) must go through semantic_fix.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -394,7 +399,9 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         {
           name: 'analyze_home',
           description:
-            'Home-wide analysis. action: health (offline + battery), safety_audit, energy, stale_items, orphans (broken links), semantic_audit (model gaps), rule_conflicts, find_equipment (by room + type), voice_exposure (Google/Alexa mappings).',
+            'Home-wide analysis. action: health (offline + battery), safety_audit, energy, stale_items, orphans (broken links),' +
+            ' semantic_audit (returns structured SemanticIssue objects with issue type + safeFix suggestions — same logic as the OpenHAB MainUI model page),' +
+            ' rule_conflicts, find_equipment (by room + type), voice_exposure (Google/Alexa mappings).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -479,7 +486,10 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         {
           name: 'remediate',
           description:
-            'Bulk remediation and generation. action: bulk_update (batch tags/groups), create_equipment (auto-provision from thing), suggest_tags, standardize_naming, optimize_persistence, export_snapshot, boilerplate (TS types).',
+            'Bulk remediation and generation.' +
+            ' action: bulk_update (batch tags/groups), create_equipment (auto-provision from thing), suggest_tags, standardize_naming, optimize_persistence, export_snapshot, boilerplate (TS types).' +
+            " semantic_fix: safely fix ONE item's semantic parent without touching other fields or groupNames \u2014 uses targeted REST endpoints (metadata only + additive group)." +
+            ' semantic_fix_all: run full audit and auto-apply all safely fixable issues (dryRun=true for preview).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -493,6 +503,8 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
                   'optimize_persistence',
                   'export_snapshot',
                   'boilerplate',
+                  'semantic_fix',
+                  'semantic_fix_all',
                 ],
               },
               itemNames: {
@@ -514,7 +526,26 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
                 type: 'string',
                 description: 'Target location group (used by: create_equipment)',
               },
-              itemName: { type: 'string', description: 'Used by: suggest_tags' },
+              itemName: { type: 'string', description: 'Used by: suggest_tags, semantic_fix' },
+              parentName: {
+                type: 'string',
+                description: 'Name of the parent item to link to (used by: semantic_fix)',
+              },
+              parentRelation: {
+                type: 'string',
+                enum: ['hasLocation', 'isPartOf', 'isPointOf'],
+                description: 'Semantic relationship key (used by: semantic_fix)',
+              },
+              addTag: {
+                type: 'string',
+                description:
+                  'Tag to add to the item (used by: semantic_fix as an alternative to parentName)',
+              },
+              dryRun: {
+                type: 'boolean',
+                description:
+                  'Preview changes without applying them (used by: semantic_fix, semantic_fix_all)',
+              },
             },
             required: ['action'],
           },
@@ -1244,6 +1275,8 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
                 'optimize_persistence',
                 'export_snapshot',
                 'boilerplate',
+                'semantic_fix',
+                'semantic_fix_all',
               ]),
               itemNames: z.array(z.string()).optional(),
               updates: z
@@ -1256,6 +1289,10 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
               thingUID: z.string().optional(),
               roomGroup: z.string().optional(),
               itemName: z.string().optional(),
+              parentName: z.string().optional(),
+              parentRelation: z.enum(['hasLocation', 'isPartOf', 'isPointOf']).optional(),
+              addTag: z.string().optional(),
+              dryRun: z.boolean().optional(),
             })
             .parse(args);
 
@@ -1280,6 +1317,38 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
               break;
             case 'boilerplate':
               result = await client.generateSystemBoilerplate();
+              break;
+            case 'semantic_fix': {
+              const opts: {
+                setSemanticParent?: {
+                  key: 'hasLocation' | 'isPartOf' | 'isPointOf';
+                  parentName: string;
+                };
+                addTag?: string;
+              } = {};
+              if (parsed.parentName && parsed.parentRelation) {
+                opts.setSemanticParent = {
+                  key: parsed.parentRelation,
+                  parentName: parsed.parentName,
+                };
+              } else if (parsed.addTag) {
+                opts.addTag = parsed.addTag;
+              } else {
+                result = {
+                  success: false,
+                  message: 'semantic_fix requires parentName+parentRelation or addTag.',
+                };
+                break;
+              }
+              result = await client.fixSemanticIssue(
+                parsed.itemName!,
+                opts,
+                parsed.dryRun ?? false
+              );
+              break;
+            }
+            case 'semantic_fix_all':
+              result = await client.applySemanticAuditFixes(parsed.dryRun ?? false);
               break;
           }
           break;

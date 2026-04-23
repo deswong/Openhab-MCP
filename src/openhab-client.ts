@@ -23,6 +23,7 @@ import {
   OpenHabServiceConfig,
   OpenHabTemplate,
   OpenHabTransformation,
+  SemanticIssue,
 } from './types.js';
 import { readLastLines, normalizeEventLog } from './log-parser.js';
 
@@ -495,7 +496,10 @@ export class OpenHabClient {
         // Only store if the prefix doesn't already have its own exact entry
         if (!byToken.has(prefix)) {
           let s = byPrefix.get(prefix);
-          if (!s) { s = new Set(); byPrefix.set(prefix, s); }
+          if (!s) {
+            s = new Set();
+            byPrefix.set(prefix, s);
+          }
           for (const n of itemNames) s.add(n);
         }
       }
@@ -731,10 +735,30 @@ export class OpenHabClient {
     this.invalidateItemCache(itemName);
     const { metadata, ...coreData } = itemData;
 
+    // Safe merge: if this item already exists, preserve any groupNames and tags not in the
+    // caller's payload. This prevents a partial update from wiping group memberships and
+    // breaking automation rules that depend on those groups.
+    const existing = this.semanticIndex.itemMap.get(itemName);
+    if (existing) {
+      if (!coreData.groupNames) {
+        coreData.groupNames = existing.groupNames;
+      } else {
+        coreData.groupNames = Array.from(
+          new Set([...existing.groupNames, ...(coreData.groupNames as string[])])
+        );
+      }
+      if (!coreData.tags) {
+        coreData.tags = existing.tags;
+      } else {
+        coreData.tags = Array.from(new Set([...existing.tags, ...(coreData.tags as string[])]));
+      }
+    }
+
     // 1. Create/Update core item (handles tags and groupNames natively)
     const response = await this.client.put(`/rest/items/${itemName}`, coreData);
 
-    // 2. Configure metadata if provided in the consolidated payload
+    // 2. Configure metadata if provided in the consolidated payload.
+    // Only the namespaces explicitly supplied are written; all others are left untouched.
     if (metadata && typeof metadata === 'object') {
       for (const [namespace, data] of Object.entries(metadata)) {
         const valData = data as Record<string, unknown>;
@@ -1471,9 +1495,7 @@ export class OpenHabClient {
 
     // idx.rooms is already the filtered list of Location items — no second pass needed
     boilerplate +=
-      'export type RoomNames = ' +
-      idx.rooms.map((i) => `'${i.name}'`).join(' | ') +
-      ';\n';
+      'export type RoomNames = ' + idx.rooms.map((i) => `'${i.name}'`).join(' | ') + ';\n';
 
     return boilerplate;
   }
@@ -1785,14 +1807,19 @@ export class OpenHabClient {
         if (!item || item.type === 'Group') continue;
         const roomLabel = roomLabelOf.get(roomName) ?? roomName;
         let bucket = byRoom.get(roomLabel);
-        if (!bucket) { bucket = []; byRoom.set(roomLabel, bucket); }
+        if (!bucket) {
+          bucket = [];
+          byRoom.set(roomLabel, bucket);
+        }
         bucket.push(`${item.name}(${item.type}=${item.state})`);
       }
 
       const totalItems = Array.from(byRoom.values()).reduce((s, b) => s + b.length, 0);
       context += `### Home Quick-Reference (${totalItems} items; call resolve_item for natural-language search)\n`;
       let written = 0;
-      for (const [roomLabel, entries] of [...byRoom.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      for (const [roomLabel, entries] of [...byRoom.entries()].sort((a, b) =>
+        a[0].localeCompare(b[0])
+      )) {
         if (written >= MAX_ITEMS_IN_CONTEXT) {
           context += `…(${totalItems - written} more items — use resolve_item)\n`;
           break;
@@ -2425,40 +2452,333 @@ config:
   }
 
   /**
-   * Advanced Remediation: Audit the semantic model for orphans and structural gaps.
+   * Audit the semantic model using the same logic as the OpenHAB MainUI model page.
+   *
+   * The UI builds its tree from metadata.semantics.config keys:
+   *   hasLocation  — Equipment/Point → parent Location
+   *   isPartOf     — Equipment/Location → parent Equipment/Location
+   *   isPointOf    — Point → parent Equipment
+   *
+   * This method fetches items with their semantics metadata, replicates that tree-build
+   * logic to find orphans and broken references, and returns structured SemanticIssue
+   * objects with a safeFix where one can be computed automatically.
    */
-  async auditSemanticModel(): Promise<{ gaps: string[]; recommendations: string[] }> {
-    await this.getItems(); // ensure index
-    const idx = this.semanticIndex;
-    const gaps: string[] = [];
-    const recommendations: string[] = [];
+  async auditSemanticModel(): Promise<{ issues: SemanticIssue[] }> {
+    // Fetch slim items with semantics metadata — same query the UI model page uses
+    const response = await this.client.get('/rest/items', {
+      params: {
+        staticDataOnly: 'true',
+        metadata: 'semantics',
+        fields: 'name,label,type,tags,groupNames,editable',
+      },
+    });
+    const items: Array<OpenHabItem & { editable?: boolean }> = response.data;
 
-    for (const [, i] of idx.itemMap) {
-      const isEquipment = i.tags?.some(
-        (t) => t.toLowerCase() === 'equipment' || t.includes('Equipment_')
-      );
-      const isPoint = i.tags?.some((t) => t.toLowerCase() === 'point' || t.includes('Point_'));
+    // Build a quick lookup map and identify semantic classes
+    const itemMap = new Map(items.map((i) => [i.name, i]));
 
-      // Check Equipment has a parent Location — O(1) itemMap lookup per group name
-      if (isEquipment) {
-        const hasLocationParent = i.groupNames?.some((gName) => {
-          const g = idx.itemMap.get(gName);
-          return g?.tags?.some((t) => t.toLowerCase() === 'location' || t.includes('Location_'));
+    const semOf = (item: OpenHabItem): string | null => {
+      const meta = item.metadata?.semantics as { value?: string } | undefined;
+      return meta?.value ?? null;
+    };
+    const configOf = (item: OpenHabItem): Record<string, string> => {
+      const meta = item.metadata?.semantics as { config?: Record<string, string> } | undefined;
+      return meta?.config ?? {};
+    };
+
+    // Collect Location item names for safeFix suggestions
+    const locationNames = items
+      .filter((i) => (semOf(i) ?? '').startsWith('Location'))
+      .map((i) => i.name);
+    const equipmentNames = items
+      .filter((i) => (semOf(i) ?? '').startsWith('Equipment'))
+      .map((i) => i.name);
+
+    const issues: SemanticIssue[] = [];
+
+    for (const item of items) {
+      const sc = semOf(item);
+      if (!sc) continue; // non-semantic item — skip
+
+      const cfg = configOf(item);
+      const editable = item.editable !== false; // default true if field absent
+
+      const base = {
+        item: item.name,
+        label: item.label,
+        type: item.type,
+        semanticClass: sc,
+        currentGroups: item.groupNames ?? [],
+        editable,
+      };
+
+      // ── Conflicting class: tagged as both Location and Equipment/Point ──
+      const isLocation = sc.startsWith('Location');
+      const isEquipment = sc.startsWith('Equipment');
+      const isPoint = sc.startsWith('Point');
+      const tagClasses = [isLocation, isEquipment, isPoint].filter(Boolean).length;
+      if (tagClasses > 1) {
+        issues.push({
+          ...base,
+          issue: 'conflicting_class',
+          description: `Item '${item.name}' has a conflicting semantic class '${sc}' — an item can only be Location, Equipment, or Point.`,
+          safeFix: null,
         });
-        if (!hasLocationParent) {
-          gaps.push(`Equipment '${i.name}' has no parent Location.`);
-          recommendations.push(`Move '${i.name}' into a Location group (e.g., Lounge, Kitchen).`);
+        continue;
+      }
+
+      // ── Non-editable: file-managed item, REST cannot fix it ──
+      if (!editable) {
+        const needsFix =
+          (isEquipment && !cfg.hasLocation && !cfg.isPartOf) ||
+          (isPoint && !cfg.isPointOf && !cfg.hasLocation);
+        if (needsFix) {
+          issues.push({
+            ...base,
+            issue: 'not_editable',
+            description: `Item '${item.name}' has a semantic issue but is file-managed. Edit the .items file directly.`,
+            safeFix: null,
+          });
+        }
+        continue;
+      }
+
+      // ── Broken reference: a config key points to a non-existent item ──
+      for (const key of ['hasLocation', 'isPartOf', 'isPointOf'] as const) {
+        const ref = cfg[key];
+        if (ref && !itemMap.has(ref)) {
+          issues.push({
+            ...base,
+            issue: 'broken_reference',
+            brokenRefKey: key,
+            brokenRefValue: ref,
+            description: `Item '${item.name}' has ${key}='${ref}' but that item does not exist.`,
+            safeFix: null, // requires human to pick a valid replacement
+          });
         }
       }
 
-      // Check Point has a parent Equipment or Location
-      if (isPoint && (!i.groupNames || i.groupNames.length === 0)) {
-        gaps.push(`Point '${i.name}' is top-level (no parent).`);
-        recommendations.push(`Link '${i.name}' to its parent Equipment or Location.`);
+      // ── Equipment with no parent Location ──
+      if (isEquipment && !cfg.hasLocation && !cfg.isPartOf) {
+        issues.push({
+          ...base,
+          issue: 'equipment_no_location',
+          description: `Equipment '${item.name}' has no parent Location (missing hasLocation or isPartOf in semantics config).`,
+          safeFix:
+            locationNames.length > 0
+              ? {
+                  action: 'set_semantic_parent',
+                  key: 'hasLocation',
+                  suggestedParents: locationNames,
+                }
+              : null,
+        });
+      }
+
+      // ── Point with no parent Equipment or Location ──
+      if (isPoint && !cfg.isPointOf && !cfg.hasLocation && !cfg.isPartOf) {
+        issues.push({
+          ...base,
+          issue: 'point_no_parent',
+          description: `Point '${item.name}' has no parent Equipment or Location (missing isPointOf/hasLocation in semantics config).`,
+          safeFix:
+            equipmentNames.length > 0
+              ? {
+                  action: 'set_semantic_parent',
+                  key: 'isPointOf',
+                  suggestedParents: equipmentNames,
+                }
+              : locationNames.length > 0
+                ? {
+                    action: 'set_semantic_parent',
+                    key: 'hasLocation',
+                    suggestedParents: locationNames,
+                  }
+                : null,
+        });
       }
     }
 
-    return { gaps, recommendations };
+    return { issues };
+  }
+
+  /**
+   * Safely fix a single semantic model issue.
+   *
+   * Uses targeted REST operations that NEVER replace the full item:
+   *   - Semantic parent → PUT /rest/items/{name}/metadata/semantics  (only semantics namespace)
+   *   - Add group membership → PUT /rest/items/{name}/groups/{group}  (additive)
+   *   - Add tag             → PUT /rest/items/{name}/tags/{tag}       (additive)
+   *
+   * dryRun=true returns a preview of what would change without making any API calls.
+   */
+  async fixSemanticIssue(
+    itemName: string,
+    opts: {
+      setSemanticParent?: { key: 'hasLocation' | 'isPartOf' | 'isPointOf'; parentName: string };
+      addTag?: string;
+    },
+    dryRun = false
+  ): Promise<{ success: boolean; message: string; before?: unknown; after?: unknown }> {
+    // Always fetch the full live item first — including editable flag and all metadata
+    let item: OpenHabItem & { editable?: boolean };
+    try {
+      const r = await this.client.get(`/rest/items/${itemName}`, {
+        params: { metadata: '.*' },
+      });
+      item = r.data;
+    } catch {
+      return { success: false, message: `Item '${itemName}' not found.` };
+    }
+
+    if (item.editable === false) {
+      return {
+        success: false,
+        message: `Item '${itemName}' is file-managed (editable=false). Edit the .items file on the OpenHAB server directly — changes via REST API are not persisted for file-managed items.`,
+      };
+    }
+
+    const before = {
+      groupNames: [...(item.groupNames ?? [])],
+      tags: [...(item.tags ?? [])],
+      semantics: (item.metadata?.semantics as Record<string, unknown>) ?? null,
+    };
+
+    if (opts.setSemanticParent) {
+      const { key, parentName } = opts.setSemanticParent;
+
+      // Validate the parent exists
+      const parentItem = this.semanticIndex.itemMap.get(parentName);
+      if (!parentItem) {
+        return { success: false, message: `Parent item '${parentName}' does not exist.` };
+      }
+
+      // Validate semantic parent type expectations
+      const parentSC =
+        (parentItem.metadata?.semantics as { value?: string } | undefined)?.value ?? '';
+      if (key === 'hasLocation' && !parentSC.startsWith('Location')) {
+        return {
+          success: false,
+          message: `'${parentName}' is not a Location item (class: '${parentSC}'). 'hasLocation' requires a Location parent.`,
+        };
+      }
+      if (key === 'isPointOf' && !parentSC.startsWith('Equipment')) {
+        return {
+          success: false,
+          message: `'${parentName}' is not an Equipment item (class: '${parentSC}'). 'isPointOf' requires an Equipment parent.`,
+        };
+      }
+
+      // Build merged semantics config — preserve all existing config keys
+      const existingMeta = item.metadata?.semantics as
+        | { value?: string; config?: Record<string, string> }
+        | undefined;
+      const existingValue = existingMeta?.value ?? '';
+      const existingConfig = existingMeta?.config ?? {};
+      const newConfig = { ...existingConfig, [key]: parentName };
+      const newSemantics = { value: existingValue, config: newConfig };
+
+      if (dryRun) {
+        return {
+          success: true,
+          message: `[DRY RUN] Would set metadata.semantics.config.${key}='${parentName}' on '${itemName}' and add '${parentName}' to groupNames.`,
+          before,
+          after: {
+            groupNames: Array.from(new Set([...(item.groupNames ?? []), parentName])),
+            tags: item.tags,
+            semantics: newSemantics,
+          },
+        };
+      }
+
+      // 1. Update semantics metadata — only this namespace, nothing else touched
+      await this.client.put(`/rest/items/${itemName}/metadata/semantics`, newSemantics);
+
+      // 2. Add parent to groupNames if not already present — use additive group endpoint
+      if (!(item.groupNames ?? []).includes(parentName)) {
+        await this.client.put(`/rest/items/${itemName}/groups/${parentName}`);
+      }
+
+      this.invalidateItemCache(itemName);
+
+      // Re-fetch to confirm
+      const updated = await this.client.get(`/rest/items/${itemName}`, {
+        params: { metadata: '.*' },
+      });
+      return {
+        success: true,
+        message: `Set semantics.config.${key}='${parentName}' on '${itemName}'.`,
+        before,
+        after: {
+          groupNames: updated.data.groupNames,
+          tags: updated.data.tags,
+          semantics: updated.data.metadata?.semantics,
+        },
+      };
+    }
+
+    if (opts.addTag) {
+      const tag = opts.addTag;
+      if (dryRun) {
+        return {
+          success: true,
+          message: `[DRY RUN] Would add tag '${tag}' to '${itemName}'.`,
+          before,
+          after: { ...before, tags: Array.from(new Set([...(item.tags ?? []), tag])) },
+        };
+      }
+      // Additive tag endpoint — never removes other tags
+      await this.client.put(`/rest/items/${itemName}/tags/${tag}`);
+      this.invalidateItemCache(itemName);
+      return {
+        success: true,
+        message: `Added tag '${tag}' to '${itemName}'.`,
+        before,
+        after: { tags: Array.from(new Set([...(item.tags ?? []), tag])) },
+      };
+    }
+
+    return {
+      success: false,
+      message: 'No operation specified (provide setSemanticParent or addTag).',
+    };
+  }
+
+  /**
+   * Run a full semantic model audit and apply all issues that have a safe auto-fix.
+   * Issues that require human input (broken_reference, not_editable, conflicting_class)
+   * are reported but not touched.
+   *
+   * dryRun=true returns a full preview without making any changes.
+   */
+  async applySemanticAuditFixes(
+    dryRun = false
+  ): Promise<{ fixed: Array<{ item: string; result: unknown }>; skipped: SemanticIssue[] }> {
+    const { issues } = await this.auditSemanticModel();
+    const fixed: Array<{ item: string; result: unknown }> = [];
+    const skipped: SemanticIssue[] = [];
+
+    for (const issue of issues) {
+      if (!issue.safeFix) {
+        skipped.push(issue);
+        continue;
+      }
+      // Use the first suggested parent for auto-fix
+      const parentName = issue.safeFix.suggestedParents[0];
+      if (!parentName) {
+        skipped.push(issue);
+        continue;
+      }
+      // Sequential (not parallel) to avoid race conditions on shared parent groups
+      const result = await this.fixSemanticIssue(
+        issue.item,
+        { setSemanticParent: { key: issue.safeFix.key, parentName } },
+        dryRun
+      );
+      fixed.push({ item: issue.item, result });
+    }
+
+    return { fixed, skipped };
   }
 
   /**
@@ -2478,7 +2798,10 @@ config:
       for (const itemName of idx.itemMap.keys()) {
         if (actionsStr.includes(itemName)) {
           let list = itemToRules.get(itemName);
-          if (!list) { list = []; itemToRules.set(itemName, list); }
+          if (!list) {
+            list = [];
+            itemToRules.set(itemName, list);
+          }
           list.push(r.uid);
         }
       }

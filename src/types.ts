@@ -10,6 +10,36 @@ export interface OpenHabItem {
   tags: string[];
   groupNames: string[];
   metadata?: Record<string, unknown>;
+  /** false for file-managed items that cannot be changed via REST API */
+  editable?: boolean;
+}
+
+/**
+ * A single issue found by auditSemanticModel.
+ * safeFix is null when the issue requires manual intervention (e.g. non-editable item,
+ * broken reference where the replacement parent must be chosen by the user).
+ */
+export interface SemanticIssue {
+  item: string;
+  label?: string;
+  type: string;
+  semanticClass: string;
+  currentGroups: string[];
+  editable: boolean;
+  issue:
+    | 'equipment_no_location'
+    | 'point_no_parent'
+    | 'broken_reference'
+    | 'conflicting_class'
+    | 'not_editable';
+  description: string;
+  brokenRefKey?: string;
+  brokenRefValue?: string;
+  safeFix: {
+    action: 'set_semantic_parent';
+    key: 'hasLocation' | 'isPartOf' | 'isPointOf';
+    suggestedParents: string[];
+  } | null;
 }
 
 /**

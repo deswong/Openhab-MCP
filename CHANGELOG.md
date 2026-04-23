@@ -30,7 +30,6 @@ All notable changes to this project will be documented in this file.
 - Tests are excluded from releases and publishing (kept locally).
 - Minor fixes and housekeeping (version bump to 1.3.1).
 
-
 ### Added
 
 - **SSE Log Buffering**: In-memory event buffer with searchable historical retrieval (`get_recent_logs`, `get_historical_logs`).
