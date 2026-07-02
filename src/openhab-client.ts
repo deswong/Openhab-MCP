@@ -43,6 +43,7 @@ export class OpenHabClient {
   private readonly MAX_LOG_BUFFER = 5000;
   private focusScope: { type: 'room' | 'group'; name: string } | null = null;
   private logFolderPath: string | null = null;
+  private sseConnectedOnce = false;
 
   /**
    * Semantic index — rebuilt whenever items_all is populated or patched.
@@ -194,6 +195,15 @@ export class OpenHabClient {
         responseType: 'stream',
         signal: this.abortController.signal,
       });
+
+      if (this.sseConnectedOnce) {
+        this.log('SSE Reconnected. Invalidating caches to ensure fresh data.');
+        this.invalidateItemCache();
+        this.cache.delete('things_all');
+        this.getItems().catch(() => {});
+      } else {
+        this.sseConnectedOnce = true;
+      }
 
       const stream = response.data;
       let buffer = '';
@@ -1529,7 +1539,7 @@ export class OpenHabClient {
    * Fuzzy search for items by name, label, tags, or groups.
    * Uses the semantic index for O(1) token lookups and set intersections.
    */
-  async searchItems(query: string): Promise<OpenHabItem[]> {
+  async searchItems(query: string): Promise<any[]> {
     const terms = query
       .toLowerCase()
       .replace(/[_-]/g, ' ')
@@ -1565,7 +1575,8 @@ export class OpenHabClient {
     return Array.from(candidates ?? [])
       .slice(0, 50)
       .map((n) => idx.itemMap.get(n)!)
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((i) => this.toSlimItem(i));
   }
 
   /**
@@ -1632,16 +1643,17 @@ export class OpenHabClient {
         const item = idx.itemMap.get(name)!;
         const roomName = idx.itemToRoom.get(name);
         const equipName = idx.itemToEquipment.get(name);
-        return {
+        const res: any = {
           name: item.name,
-          label: item.label,
           type: item.type,
           state: item.state,
-          room: roomName ? (roomLabelOf.get(roomName) ?? roomName) : undefined,
-          equipment: equipName ? (idx.itemMap.get(equipName)?.label ?? equipName) : undefined,
-          tags: item.tags ?? [],
           score,
         };
+        if (item.label && item.label !== item.name) res.label = item.label;
+        if (roomName) res.room = roomLabelOf.get(roomName) ?? roomName;
+        if (equipName) res.equipment = idx.itemMap.get(equipName)?.label ?? equipName;
+        if (item.tags && item.tags.length > 0) res.tags = item.tags;
+        return res;
       })
       .filter((r) => r.name);
   }
@@ -1705,11 +1717,7 @@ export class OpenHabClient {
    * Gets all equipment and items in a specific room.
    * Uses semantic model traversal.
    */
-  async getRoomInventory(roomName: string): Promise<{
-    room: OpenHabItem;
-    equipment: Array<{ info: OpenHabItem; points: OpenHabItem[] }>;
-    standaloneItems: OpenHabItem[];
-  }> {
+  async getRoomInventory(roomName: string): Promise<any> {
     await this.getItems(); // ensure index
     const idx = this.semanticIndex;
 
@@ -1735,33 +1743,41 @@ export class OpenHabClient {
     const equipment = directChildren
       .filter((i) => i.tags?.some((t) => t.toLowerCase().includes('equipment')))
       .map((e) => ({
-        info: e,
+        info: this.toSlimItem(e),
         points: Array.from(idx.byRoom.get(e.name.toLowerCase()) ?? [])
           .map((n) => idx.itemMap.get(n)!)
-          .filter(Boolean),
+          .filter(Boolean)
+          .map((p) => this.toSlimItem(p)),
       }));
 
-    const standaloneItems = directChildren.filter(
-      (i) => !i.tags?.some((t) => t.toLowerCase().includes('equipment'))
-    );
+    const standaloneItems = directChildren
+      .filter((i) => !i.tags?.some((t) => t.toLowerCase().includes('equipment')))
+      .map((i) => this.toSlimItem(i));
 
-    return { room, equipment, standaloneItems };
+    return { room: this.toSlimItem(room), equipment, standaloneItems };
+  }
+
+  private toSlimItem(i: OpenHabItem): any {
+    const res: any = { name: i.name, type: i.type };
+    if (i.state !== undefined) res.state = i.state;
+    if (i.label && i.label !== i.name) res.label = i.label;
+    if (i.tags && i.tags.length > 0) res.tags = i.tags;
+    if (i.groupNames && i.groupNames.length > 0) res.groups = i.groupNames;
+    return res;
   }
 
   /**
    * Minimal schema mapping for discovery.
    */
-  async getSchema(): Promise<
-    Array<{ name: string; type: string; label?: string; tags: string[]; groups: string[] }>
-  > {
+  async getSchema(): Promise<any[]> {
     const items = await this.getItems();
-    return items.map((i) => ({
-      name: i.name,
-      type: i.type,
-      label: i.label,
-      tags: i.tags,
-      groups: i.groupNames,
-    }));
+    return items.map((i) => {
+      const res: any = { name: i.name, type: i.type };
+      if (i.label && i.label !== i.name) res.label = i.label;
+      if (i.tags && i.tags.length > 0) res.tags = i.tags;
+      if (i.groupNames && i.groupNames.length > 0) res.groups = i.groupNames;
+      return res;
+    });
   }
 
   /**

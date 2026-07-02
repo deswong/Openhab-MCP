@@ -1,27 +1,30 @@
 import fs from 'fs';
 
 /**
- * Utility to read the last N lines of a file without loading the whole file into memory.
+ * Utility to read the last N lines of a file without loading the whole file into memory,
+ * fully asynchronous to prevent blocking the event loop.
  */
 export async function readLastLines(filePath: string, maxLines: number): Promise<string[]> {
+  let fileHandle: fs.promises.FileHandle | null = null;
   try {
-    if (!fs.existsSync(filePath)) return [];
+    const exists = await fs.promises.access(filePath, fs.constants.F_OK).then(() => true).catch(() => false);
+    if (!exists) return [];
 
-    const stats = fs.statSync(filePath);
+    const stats = await fs.promises.stat(filePath);
     const fileSize = stats.size;
     const bufferSize = Math.min(fileSize, 65536); // 64KB chunks
     const buffer = Buffer.alloc(bufferSize);
 
-    const fd = fs.openSync(filePath, 'r');
+    fileHandle = await fs.promises.open(filePath, 'r');
     let lines: string[] = [];
     let position = fileSize;
 
     while (lines.length <= maxLines && position > 0) {
       const readSize = Math.min(position, bufferSize);
       position -= readSize;
-      fs.readSync(fd, buffer, 0, readSize, position);
+      await fileHandle.read(buffer, 0, readSize, position);
 
-      const chunk = buffer.slice(0, readSize).toString();
+      const chunk = buffer.subarray(0, readSize).toString();
       const chunkLines = chunk.split('\n');
 
       // If we're not at the very end of the file, the first line of this chunk might be partial
@@ -33,11 +36,18 @@ export async function readLastLines(filePath: string, maxLines: number): Promise
       lines = [...chunkLines, ...lines];
     }
 
-    fs.closeSync(fd);
     return lines.slice(-maxLines).filter((l) => l.trim().length > 0);
   } catch (error) {
     console.error(`[LogParser] Error reading ${filePath}:`, error);
     return [];
+  } finally {
+    if (fileHandle) {
+      try {
+        await fileHandle.close();
+      } catch (err) {
+        console.error(`[LogParser] Error closing ${filePath}:`, err);
+      }
+    }
   }
 }
 

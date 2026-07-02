@@ -262,9 +262,9 @@ Tools designed to automate complex workflows and provide AI-friendly context.
 
 MIT
 
-## Release 1.3.2
+## Release 1.4.0
 
-This release (1.3.2) contains performance optimisations across several hot-path methods and a correctness fix for `detectRuleConflicts`. See [CHANGELOG.md](CHANGELOG.md) for full details.
+This release (1.4.0) contains token usage optimizations to reduce cost, non-blocking asynchronous log parsing, pre-compiled schemas, and SSE reconnect auto-cache invalidation. See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## Contributing
 

@@ -3,6 +3,230 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { OpenHabClient } from './openhab-client.js';
 
+// Pre-compiled Zod schemas for MCP tools
+const resolveItemSchema = z.object({ query: z.string() });
+const sendCommandSchema = z.object({ itemName: z.string(), command: z.string() });
+const executeBatchSchema = z.object({
+  commands: z.array(
+    z.object({
+      itemName: z.string(),
+      command: z.string().optional(),
+      state: z.string().optional(),
+    })
+  ),
+});
+const scheduleCommandSchema = z.object({ itemName: z.string(), command: z.string(), delayMs: z.number() });
+const queryItemsSchema = z.object({
+  action: z.enum([
+    'all',
+    'get',
+    'multi',
+    'search',
+    'master_search',
+    'room_inventory',
+    'semantic_path',
+    'neighbors',
+    'schema',
+  ]),
+  itemName: z.string().optional(),
+  itemNames: z.array(z.string()).optional(),
+  query: z.string().optional(),
+  roomName: z.string().optional(),
+  tags: z.string().optional(),
+  type: z.string().optional(),
+  state: z.string().optional(),
+  includeMetadata: z.boolean().optional(),
+});
+const queryThingsSchema = z.object({
+  action: z.enum(['all', 'get', 'status']),
+  thingUID: z.string().optional(),
+});
+const queryRulesSchema = z.object({
+  action: z.enum(['all', 'get']),
+  ruleUID: z.string().optional(),
+});
+const manageItemSchema = z.object({
+  action: z.enum([
+    'create_or_update',
+    'delete',
+    'update_state',
+    'add_tag',
+    'remove_tag',
+    'set_metadata',
+    'remove_metadata',
+  ]),
+  itemName: z.string(),
+  itemData: z.record(z.string(), z.any()).optional(),
+  state: z.string().optional(),
+  tag: z.string().optional(),
+  namespace: z.string().optional(),
+  value: z.string().optional(),
+  config: z.record(z.string(), z.any()).optional(),
+});
+const manageThingSchema = z.object({
+  action: z.enum(['create', 'update', 'delete', 'enable', 'disable', 'configure']),
+  thingUID: z.string().optional(),
+  thingData: z.record(z.string(), z.any()).optional(),
+  config: z.record(z.string(), z.any()).optional(),
+  force: z.boolean().optional(),
+});
+const manageRuleSchema = z.object({
+  action: z.enum(['create', 'update', 'delete', 'enable', 'disable', 'run']),
+  ruleUID: z.string().optional(),
+  ruleData: z.record(z.string(), z.any()).optional(),
+});
+const manageLinkSchema = z.object({
+  action: z.enum(['list', 'link', 'unlink', 'configure']),
+  itemName: z.string().optional(),
+  channelUID: z.string().optional(),
+  config: z.record(z.string(), z.any()).optional(),
+  profile: z.string().optional(),
+  profileConfig: z.record(z.string(), z.any()).optional(),
+});
+const manageSceneSchema = z.object({
+  action: z.enum(['capture', 'activate']),
+  name: z.string(),
+  itemNames: z.array(z.string()).optional(),
+});
+const manageLogsSchema = z.object({
+  action: z.enum(['set_folder', 'recent', 'historical', 'search']),
+  folderPath: z.string().optional(),
+  lines: z.number().optional(),
+  search: z.string().optional(),
+  query: z.string().optional(),
+  logType: z.enum(['openhab', 'events']).optional(),
+  maxResults: z.number().optional(),
+});
+const managePersistenceSchema = z.object({
+  action: z.enum(['services', 'get_data', 'store_data', 'statistics', 'summarize']),
+  itemName: z.string().optional(),
+  serviceId: z.string().optional(),
+  starttime: z.string().optional(),
+  endtime: z.string().optional(),
+  time: z.string().optional(),
+  state: z.string().optional(),
+});
+const manageUiSchema = z.object({
+  action: z.enum([
+    'addons',
+    'install_addon',
+    'uninstall_addon',
+    'sitemaps',
+    'sitemap_to_main_ui',
+    'ui_components',
+    'ui_tiles',
+    'generate_widget',
+    'semantic_tags',
+    'create_tag',
+    'update_tag',
+    'delete_tag',
+    'inbox_list',
+    'inbox_approve',
+    'inbox_ignore',
+    'inbox_unignore',
+  ]),
+  addonId: z.string().optional(),
+  namespace: z.string().optional(),
+  itemName: z.string().optional(),
+  sitemapName: z.string().optional(),
+  tagId: z.string().optional(),
+  tagData: z.any().optional(),
+  thingUID: z.string().optional(),
+  label: z.string().optional(),
+  newThingId: z.string().optional(),
+});
+const manageSystemSchema = z.object({
+  action: z.enum([
+    'system_info',
+    'services',
+    'service_config_get',
+    'service_config_update',
+    'logger_list',
+    'logger_set',
+    'transformations',
+    'templates',
+    'trigger_scan',
+    'voice_say',
+    'voice_interpret',
+    'voices',
+    'audio_sinks',
+    'audio_sources',
+    'habot',
+  ]),
+  serviceId: z.string().optional(),
+  config: z.record(z.string(), z.any()).optional(),
+  loggerName: z.string().optional(),
+  level: z.string().optional(),
+  bindingId: z.string().optional(),
+  text: z.string().optional(),
+  sinkId: z.string().optional(),
+  interpreterIds: z.string().optional(),
+});
+const analyzeHomeSchema = z.object({
+  action: z.enum([
+    'health',
+    'safety_audit',
+    'energy',
+    'stale_items',
+    'orphans',
+    'semantic_audit',
+    'rule_conflicts',
+    'find_equipment',
+    'voice_exposure',
+  ]),
+  days: z.number().optional(),
+  roomName: z.string().optional(),
+  equipmentType: z.string().optional(),
+});
+const diagnoseItemSchema = z.object({
+  action: z.enum(['explain', 'topology']),
+  itemName: z.string().optional(),
+});
+const automationSchema = z.object({
+  action: z.enum(['generate_rule', 'discover_patterns', 'shadow_run', 'simulate', 'validate_rule']),
+  intent: z.string().optional(),
+  itemName: z.string().optional(),
+  correlatedItemName: z.string().optional(),
+  command: z.string().optional(),
+  commands: z.array(z.object({ itemName: z.string(), command: z.string() })).optional(),
+  script: z.string().optional(),
+});
+const remediateSchema = z.object({
+  action: z.enum([
+    'bulk_update',
+    'create_equipment',
+    'suggest_tags',
+    'standardize_naming',
+    'optimize_persistence',
+    'export_snapshot',
+    'boilerplate',
+    'semantic_fix',
+    'semantic_fix_all',
+  ]),
+  itemNames: z.array(z.string()).optional(),
+  updates: z
+    .object({
+      tags: z.array(z.string()).optional(),
+      category: z.string().optional(),
+      groupNames: z.array(z.string()).optional(),
+    })
+    .optional(),
+  thingUID: z.string().optional(),
+  roomGroup: z.string().optional(),
+  itemName: z.string().optional(),
+  parentName: z.string().optional(),
+  parentRelation: z.enum(['hasLocation', 'isPartOf', 'isPointOf']).optional(),
+  addTag: z.string().optional(),
+  dryRun: z.boolean().optional(),
+});
+const controlMediaSchema = z.object({
+  equipmentName: z.string(),
+  action: z.enum(['play', 'pause', 'next', 'previous', 'volume_up', 'volume_down']),
+});
+const mcpStatusSchema = z.object({
+  action: z.enum(['health', 'capabilities', 'prompt_context']),
+});
+
 export function registerTools(server: McpServer, client: OpenHabClient) {
   server.server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
@@ -606,68 +830,32 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
           break;
 
         case 'resolve_item': {
-          const { query } = z.object({ query: z.string() }).parse(args);
+          const { query } = resolveItemSchema.parse(args);
           result = await client.resolveItem(query);
           break;
         }
 
         case 'send_command': {
-          const { itemName, command } = z
-            .object({ itemName: z.string(), command: z.string() })
-            .parse(args);
+          const { itemName, command } = sendCommandSchema.parse(args);
           result = await client.sendCommand(itemName, command);
           break;
         }
 
         case 'execute_batch': {
-          const { commands } = z
-            .object({
-              commands: z.array(
-                z.object({
-                  itemName: z.string(),
-                  command: z.string().optional(),
-                  state: z.string().optional(),
-                })
-              ),
-            })
-            .parse(args);
+          const { commands } = executeBatchSchema.parse(args);
           result = await client.executeBatch(commands);
           break;
         }
 
         case 'schedule_command': {
-          const { itemName, command, delayMs } = z
-            .object({ itemName: z.string(), command: z.string(), delayMs: z.number() })
-            .parse(args);
+          const { itemName, command, delayMs } = scheduleCommandSchema.parse(args);
           result = await client.scheduleCommand(itemName, command, delayMs);
           break;
         }
 
         // ─── Query / Read ──────────────────────────────────────────────────────
         case 'query_items': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'all',
-                'get',
-                'multi',
-                'search',
-                'master_search',
-                'room_inventory',
-                'semantic_path',
-                'neighbors',
-                'schema',
-              ]),
-              itemName: z.string().optional(),
-              itemNames: z.array(z.string()).optional(),
-              query: z.string().optional(),
-              roomName: z.string().optional(),
-              tags: z.string().optional(),
-              type: z.string().optional(),
-              state: z.string().optional(),
-              includeMetadata: z.boolean().optional(),
-            })
-            .parse(args);
+          const parsed = queryItemsSchema.parse(args);
 
           switch (parsed.action) {
             case 'all':
@@ -710,12 +898,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'query_things': {
-          const { action, thingUID } = z
-            .object({
-              action: z.enum(['all', 'get', 'status']),
-              thingUID: z.string().optional(),
-            })
-            .parse(args);
+          const { action, thingUID } = queryThingsSchema.parse(args);
           if (action === 'all') result = await client.getThings();
           else if (action === 'get') result = await client.getThing(thingUID!);
           else result = await client.getThingStatus(thingUID!);
@@ -723,38 +906,14 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'query_rules': {
-          const { action, ruleUID } = z
-            .object({
-              action: z.enum(['all', 'get']),
-              ruleUID: z.string().optional(),
-            })
-            .parse(args);
+          const { action, ruleUID } = queryRulesSchema.parse(args);
           result = action === 'all' ? await client.getRules() : await client.getRule(ruleUID!);
           break;
         }
 
         // ─── CRUD Management ───────────────────────────────────────────────────
         case 'manage_item': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'create_or_update',
-                'delete',
-                'update_state',
-                'add_tag',
-                'remove_tag',
-                'set_metadata',
-                'remove_metadata',
-              ]),
-              itemName: z.string(),
-              itemData: z.record(z.string(), z.any()).optional(),
-              state: z.string().optional(),
-              tag: z.string().optional(),
-              namespace: z.string().optional(),
-              value: z.string().optional(),
-              config: z.record(z.string(), z.any()).optional(),
-            })
-            .parse(args);
+          const parsed = manageItemSchema.parse(args);
 
           switch (parsed.action) {
             case 'create_or_update':
@@ -788,15 +947,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_thing': {
-          const { action, thingUID, thingData, config, force } = z
-            .object({
-              action: z.enum(['create', 'update', 'delete', 'enable', 'disable', 'configure']),
-              thingUID: z.string().optional(),
-              thingData: z.record(z.string(), z.any()).optional(),
-              config: z.record(z.string(), z.any()).optional(),
-              force: z.boolean().optional(),
-            })
-            .parse(args);
+          const { action, thingUID, thingData, config, force } = manageThingSchema.parse(args);
 
           switch (action) {
             case 'create':
@@ -822,13 +973,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_rule': {
-          const { action, ruleUID, ruleData } = z
-            .object({
-              action: z.enum(['create', 'update', 'delete', 'enable', 'disable', 'run']),
-              ruleUID: z.string().optional(),
-              ruleData: z.record(z.string(), z.any()).optional(),
-            })
-            .parse(args);
+          const { action, ruleUID, ruleData } = manageRuleSchema.parse(args);
 
           switch (action) {
             case 'create':
@@ -854,16 +999,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_link': {
-          const { action, itemName, channelUID, config, profile, profileConfig } = z
-            .object({
-              action: z.enum(['list', 'link', 'unlink', 'configure']),
-              itemName: z.string().optional(),
-              channelUID: z.string().optional(),
-              config: z.record(z.string(), z.any()).optional(),
-              profile: z.string().optional(),
-              profileConfig: z.record(z.string(), z.any()).optional(),
-            })
-            .parse(args);
+          const { action, itemName, channelUID, config, profile, profileConfig } = manageLinkSchema.parse(args);
 
           if (action === 'list') result = await client.getLinks(itemName, channelUID);
           else if (action === 'link')
@@ -881,13 +1017,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_scene': {
-          const { action, name, itemNames } = z
-            .object({
-              action: z.enum(['capture', 'activate']),
-              name: z.string(),
-              itemNames: z.array(z.string()).optional(),
-            })
-            .parse(args);
+          const { action, name, itemNames } = manageSceneSchema.parse(args);
           result =
             action === 'capture'
               ? await client.captureScene(name, itemNames!)
@@ -897,17 +1027,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
 
         // ─── System Services ───────────────────────────────────────────────────
         case 'manage_logs': {
-          const parsed = z
-            .object({
-              action: z.enum(['set_folder', 'recent', 'historical', 'search']),
-              folderPath: z.string().optional(),
-              lines: z.number().optional(),
-              search: z.string().optional(),
-              query: z.string().optional(),
-              logType: z.enum(['openhab', 'events']).optional(),
-              maxResults: z.number().optional(),
-            })
-            .parse(args);
+          const parsed = manageLogsSchema.parse(args);
 
           switch (parsed.action) {
             case 'set_folder':
@@ -932,17 +1052,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_persistence': {
-          const parsed = z
-            .object({
-              action: z.enum(['services', 'get_data', 'store_data', 'statistics', 'summarize']),
-              itemName: z.string().optional(),
-              serviceId: z.string().optional(),
-              starttime: z.string().optional(),
-              endtime: z.string().optional(),
-              time: z.string().optional(),
-              state: z.string().optional(),
-            })
-            .parse(args);
+          const parsed = managePersistenceSchema.parse(args);
 
           switch (parsed.action) {
             case 'services':
@@ -985,37 +1095,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_ui': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'addons',
-                'install_addon',
-                'uninstall_addon',
-                'sitemaps',
-                'sitemap_to_main_ui',
-                'ui_components',
-                'ui_tiles',
-                'generate_widget',
-                'semantic_tags',
-                'create_tag',
-                'update_tag',
-                'delete_tag',
-                'inbox_list',
-                'inbox_approve',
-                'inbox_ignore',
-                'inbox_unignore',
-              ]),
-              addonId: z.string().optional(),
-              namespace: z.string().optional(),
-              itemName: z.string().optional(),
-              sitemapName: z.string().optional(),
-              tagId: z.string().optional(),
-              tagData: z.any().optional(),
-              thingUID: z.string().optional(),
-              label: z.string().optional(),
-              newThingId: z.string().optional(),
-            })
-            .parse(args);
+          const parsed = manageUiSchema.parse(args);
 
           switch (parsed.action) {
             case 'addons':
@@ -1075,35 +1155,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_system': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'system_info',
-                'services',
-                'service_config_get',
-                'service_config_update',
-                'logger_list',
-                'logger_set',
-                'transformations',
-                'templates',
-                'trigger_scan',
-                'voice_say',
-                'voice_interpret',
-                'voices',
-                'audio_sinks',
-                'audio_sources',
-                'habot',
-              ]),
-              serviceId: z.string().optional(),
-              config: z.record(z.string(), z.any()).optional(),
-              loggerName: z.string().optional(),
-              level: z.string().optional(),
-              bindingId: z.string().optional(),
-              text: z.string().optional(),
-              sinkId: z.string().optional(),
-              interpreterIds: z.string().optional(),
-            })
-            .parse(args);
+          const parsed = manageSystemSchema.parse(args);
 
           switch (parsed.action) {
             case 'system_info':
@@ -1157,24 +1209,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
 
         // ─── Intelligence & Analysis ───────────────────────────────────────────
         case 'analyze_home': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'health',
-                'safety_audit',
-                'energy',
-                'stale_items',
-                'orphans',
-                'semantic_audit',
-                'rule_conflicts',
-                'find_equipment',
-                'voice_exposure',
-              ]),
-              days: z.number().optional(),
-              roomName: z.string().optional(),
-              equipmentType: z.string().optional(),
-            })
-            .parse(args);
+          const parsed = analyzeHomeSchema.parse(args);
 
           switch (parsed.action) {
             case 'health':
@@ -1209,12 +1244,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'diagnose_item': {
-          const { action, itemName } = z
-            .object({
-              action: z.enum(['explain', 'topology']),
-              itemName: z.string().optional(),
-            })
-            .parse(args);
+          const { action, itemName } = diagnoseItemSchema.parse(args);
           result =
             action === 'explain'
               ? await client.explainItemState(itemName!)
@@ -1223,23 +1253,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'automation': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'generate_rule',
-                'discover_patterns',
-                'shadow_run',
-                'simulate',
-                'validate_rule',
-              ]),
-              intent: z.string().optional(),
-              itemName: z.string().optional(),
-              correlatedItemName: z.string().optional(),
-              command: z.string().optional(),
-              commands: z.array(z.object({ itemName: z.string(), command: z.string() })).optional(),
-              script: z.string().optional(),
-            })
-            .parse(args);
+          const parsed = automationSchema.parse(args);
 
           switch (parsed.action) {
             case 'generate_rule':
@@ -1265,36 +1279,7 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'remediate': {
-          const parsed = z
-            .object({
-              action: z.enum([
-                'bulk_update',
-                'create_equipment',
-                'suggest_tags',
-                'standardize_naming',
-                'optimize_persistence',
-                'export_snapshot',
-                'boilerplate',
-                'semantic_fix',
-                'semantic_fix_all',
-              ]),
-              itemNames: z.array(z.string()).optional(),
-              updates: z
-                .object({
-                  tags: z.array(z.string()).optional(),
-                  category: z.string().optional(),
-                  groupNames: z.array(z.string()).optional(),
-                })
-                .optional(),
-              thingUID: z.string().optional(),
-              roomGroup: z.string().optional(),
-              itemName: z.string().optional(),
-              parentName: z.string().optional(),
-              parentRelation: z.enum(['hasLocation', 'isPartOf', 'isPointOf']).optional(),
-              addTag: z.string().optional(),
-              dryRun: z.boolean().optional(),
-            })
-            .parse(args);
+          const parsed = remediateSchema.parse(args);
 
           switch (parsed.action) {
             case 'bulk_update':
@@ -1355,20 +1340,13 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'control_media': {
-          const { equipmentName, action } = z
-            .object({
-              equipmentName: z.string(),
-              action: z.enum(['play', 'pause', 'next', 'previous', 'volume_up', 'volume_down']),
-            })
-            .parse(args);
+          const { equipmentName, action } = controlMediaSchema.parse(args);
           result = await client.controlMedia(equipmentName, action);
           break;
         }
 
         case 'mcp_status': {
-          const { action } = z
-            .object({ action: z.enum(['health', 'capabilities', 'prompt_context']) })
-            .parse(args);
+          const { action } = mcpStatusSchema.parse(args);
           if (action === 'health') result = client.getMcpHealth();
           else if (action === 'capabilities') result = client.getMcpCapabilities();
           else result = await client.getPromptContext();

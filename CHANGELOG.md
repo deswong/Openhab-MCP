@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-07-03
+
+### Performance
+
+- **Token Optimization**: Streamlined JSON payloads returned by `getSchema`, `searchItems`, `resolveItem`, and `getRoomInventory` by omitting redundant labels (matching the item name) and filtering out empty tag/group arrays. Reduces token usage by up to 60%.
+- **Pre-compiled Zod Schemas**: Moved schema compilation to module level in `src/tools.ts`, avoiding runtime compilation overhead on every MCP call.
+- **Asynchronous Log Parsing**: Refactored `readLastLines` in `src/log-parser.ts` to use non-blocking asynchronous Node.js `fs.promises` instead of synchronous file API calls.
+
+### Added
+
+- **SSE Cache Invalidation on Reconnect**: Automatically invalidates caches and triggers background refetches upon SSE stream reconnection to ensure no state updates are missed.
+
 ## [1.3.2] - 2026-04-24
 
 ### Performance
