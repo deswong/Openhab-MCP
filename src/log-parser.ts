@@ -7,7 +7,10 @@ import fs from 'fs';
 export async function readLastLines(filePath: string, maxLines: number): Promise<string[]> {
   let fileHandle: fs.promises.FileHandle | null = null;
   try {
-    const exists = await fs.promises.access(filePath, fs.constants.F_OK).then(() => true).catch(() => false);
+    const exists = await fs.promises
+      .access(filePath, fs.constants.F_OK)
+      .then(() => true)
+      .catch(() => false);
     if (!exists) return [];
 
     const stats = await fs.promises.stat(filePath);

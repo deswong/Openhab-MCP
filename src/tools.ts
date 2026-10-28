@@ -15,7 +15,11 @@ const executeBatchSchema = z.object({
     })
   ),
 });
-const scheduleCommandSchema = z.object({ itemName: z.string(), command: z.string(), delayMs: z.number() });
+const scheduleCommandSchema = z.object({
+  itemName: z.string(),
+  command: z.string(),
+  delayMs: z.number(),
+});
 const queryItemsSchema = z.object({
   action: z.enum([
     'all',
@@ -999,7 +1003,8 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
         }
 
         case 'manage_link': {
-          const { action, itemName, channelUID, config, profile, profileConfig } = manageLinkSchema.parse(args);
+          const { action, itemName, channelUID, config, profile, profileConfig } =
+            manageLinkSchema.parse(args);
 
           if (action === 'list') result = await client.getLinks(itemName, channelUID);
           else if (action === 'link')

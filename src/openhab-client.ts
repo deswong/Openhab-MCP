@@ -927,6 +927,8 @@ export class OpenHabClient {
     config?: Record<string, unknown>
   ): Promise<void> {
     const response = await this.client.put(`/rest/links/${itemName}/${channelUID}`, {
+      itemName,
+      channelUID,
       configuration: config || {},
     });
     return response.data;

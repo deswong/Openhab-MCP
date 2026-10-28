@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Item-channel links**: Include the item name and channel UID in link and profile update payloads to satisfy OpenHAB REST validation and avoid HTTP 400 responses.
+
+### Security
+
+- Raise the minimum supported versions of the MCP TypeScript SDK and Axios to patched releases.
+
 ## [1.4.0] - 2026-07-03
 
 ### Performance

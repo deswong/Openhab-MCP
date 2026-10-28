@@ -123,7 +123,24 @@ describe('OpenHabClient', () => {
 
       expect(mock.history.get[0].params.itemName).toBe('i');
       expect(mock.history.put.length).toBe(1);
+      expect(JSON.parse(mock.history.put[0].data)).toEqual({
+        itemName: 'i',
+        channelUID: 'c',
+        configuration: { c: 1 },
+      });
       expect(mock.history.delete.length).toBe(1);
+    });
+
+    it('should include the link identity when applying a profile', async () => {
+      mock.onPut(`${baseUrl}/rest/links/i/c`).reply(200);
+
+      await client.configureLinkProfile('i', 'c', 'system:follow', { param: 'value' });
+
+      expect(JSON.parse(mock.history.put[0].data)).toEqual({
+        itemName: 'i',
+        channelUID: 'c',
+        configuration: { profile: 'system:follow', param: 'value' },
+      });
     });
   });
 
