@@ -231,10 +231,7 @@ Tools designed to automate complex workflows and provide AI-friendly context.
 
 ### 🔹 Links & Semantic Model
 
-- `get_links`: View relationships between Items and Hardware Channels.
-- `link_item_to_channel`: Bind an item to a specific channel.
-- `unlink_item_from_channel`: Remove a binding.
-- `configure_link_profile`: Apply profiles like `system:follow` or `transform:JS` to a link.
+- `manage_link`: List, create, or remove item-channel links, or configure a link profile. Write actions require the exact `itemName` and full `channelUID` (for example, `binding:thing:channel`); `link` accepts `config`, while `configure` accepts `profile` and optional `profileConfig`.
 - `get_semantic_tags`: Retrieve standard Location/Equipment/Point tags.
 - `suggest_semantic_tags`: AI-driven tagging suggestions based on item naming.
 
