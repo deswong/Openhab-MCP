@@ -6,7 +6,7 @@ This server exposes the entire OpenHAB REST API as a set of tools for AI models 
 
 ## Prerequisites
 
-- Node.js (v18 or higher)
+- Node.js (v20 or higher)
 - An OpenHAB API Token (Generate in User Profile -> API Tokens)
 
 ## Configuration

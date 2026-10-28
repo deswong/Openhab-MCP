@@ -1,5 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { OpenHabClient } from './openhab-client.js';
 
@@ -231,591 +230,601 @@ const mcpStatusSchema = z.object({
   action: z.enum(['health', 'capabilities', 'prompt_context']),
 });
 
+type ToolDefinition = {
+  name: string;
+  description: string;
+  inputSchema: Parameters<typeof fromJsonSchema>[0];
+};
+
+const toolOutputSchema = z.object({
+  result: z.unknown().optional(),
+  error: z.string().optional(),
+});
+
 export function registerTools(server: McpServer, client: OpenHabClient) {
-  server.server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: [
-        // ─── Tier 1: Core standalone ──────────────────────────────────────────
-        {
-          name: 'initial_discovery',
-          description:
-            'One-shot bootstrap: returns a compact guidance context with a room-grouped quick-reference of every item (name, type, live state). Call ONCE on first contact. Do NOT also call generate_home_blueprint or get_system_summary — this covers all discovery needs.',
-          inputSchema: { type: 'object', properties: {} },
+  const toolDefinitions: ToolDefinition[] = [
+    // ─── Tier 1: Core standalone ──────────────────────────────────────────
+    {
+      name: 'initial_discovery',
+      description:
+        'One-shot bootstrap: returns a compact guidance context with a room-grouped quick-reference of every item (name, type, live state). Call ONCE on first contact. Do NOT also call generate_home_blueprint or get_system_summary — this covers all discovery needs.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_system_summary',
+      description: 'High-density snapshot of the OpenHAB system: items, things, rooms, health.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'generate_home_blueprint',
+      description:
+        'Full room-by-room Markdown guide of the home. Use for layout exploration or when a user explicitly asks for a home overview — NOT as a first step (use initial_discovery instead).',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'resolve_item',
+      description:
+        'PRIMARY item finder. Converts natural-language intent ("kitchen light", "front door sensor") into ranked matches with exact names, types, rooms, and live states. Call this BEFORE any other search.',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'send_command',
+      description: 'Send a command (ON, OFF, numeric value, etc.) to a single item.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          itemName: { type: 'string' },
+          command: { type: 'string' },
         },
-        {
-          name: 'get_system_summary',
-          description: 'High-density snapshot of the OpenHAB system: items, things, rooms, health.',
-          inputSchema: { type: 'object', properties: {} },
-        },
-        {
-          name: 'generate_home_blueprint',
-          description:
-            'Full room-by-room Markdown guide of the home. Use for layout exploration or when a user explicitly asks for a home overview — NOT as a first step (use initial_discovery instead).',
-          inputSchema: { type: 'object', properties: {} },
-        },
-        {
-          name: 'resolve_item',
-          description:
-            'PRIMARY item finder. Converts natural-language intent ("kitchen light", "front door sensor") into ranked matches with exact names, types, rooms, and live states. Call this BEFORE any other search.',
-          inputSchema: {
-            type: 'object',
-            properties: { query: { type: 'string' } },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'send_command',
-          description: 'Send a command (ON, OFF, numeric value, etc.) to a single item.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              itemName: { type: 'string' },
-              command: { type: 'string' },
-            },
-            required: ['itemName', 'command'],
-          },
-        },
-        {
-          name: 'execute_batch',
-          description:
-            'Execute multiple commands in parallel. Use for "Goodnight", scene-like, or multi-device actions.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              commands: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    itemName: { type: 'string' },
-                    command: { type: 'string', description: 'Send command (preferred)' },
-                    state: { type: 'string', description: 'Direct state update (use when needed)' },
-                  },
-                  required: ['itemName'],
-                },
+        required: ['itemName', 'command'],
+      },
+    },
+    {
+      name: 'execute_batch',
+      description:
+        'Execute multiple commands in parallel. Use for "Goodnight", scene-like, or multi-device actions.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          commands: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                itemName: { type: 'string' },
+                command: { type: 'string', description: 'Send command (preferred)' },
+                state: { type: 'string', description: 'Direct state update (use when needed)' },
               },
+              required: ['itemName'],
             },
-            required: ['commands'],
           },
         },
-        {
-          name: 'schedule_command',
-          description: 'Schedule a command to run after a delay (e.g. "turn off in 20 minutes").',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              itemName: { type: 'string' },
-              command: { type: 'string' },
-              delayMs: { type: 'number', description: 'Delay in milliseconds' },
-            },
-            required: ['itemName', 'command', 'delayMs'],
-          },
+        required: ['commands'],
+      },
+    },
+    {
+      name: 'schedule_command',
+      description: 'Schedule a command to run after a delay (e.g. "turn off in 20 minutes").',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          itemName: { type: 'string' },
+          command: { type: 'string' },
+          delayMs: { type: 'number', description: 'Delay in milliseconds' },
         },
+        required: ['itemName', 'command', 'delayMs'],
+      },
+    },
 
-        // ─── Tier 2: Query / Read ─────────────────────────────────────────────
-        {
-          name: 'query_items',
-          description:
-            'Read item data. action: all (list with optional filters), get (by name), multi (batch by names), search (fuzzy text), master_search (across items+things+rules), room_inventory, semantic_path, neighbors, schema.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'all',
-                  'get',
-                  'multi',
-                  'search',
-                  'master_search',
-                  'room_inventory',
-                  'semantic_path',
-                  'neighbors',
-                  'schema',
-                ],
-              },
-              itemName: { type: 'string', description: 'Used by: get, semantic_path, neighbors' },
-              itemNames: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Used by: multi',
-              },
-              query: { type: 'string', description: 'Used by: search, master_search' },
-              roomName: { type: 'string', description: 'Used by: room_inventory' },
-              tags: { type: 'string', description: 'Comma-separated tag filter (used by: all)' },
-              type: { type: 'string', description: 'Item type filter (used by: all)' },
-              state: { type: 'string', description: 'State equality filter (used by: all)' },
-              includeMetadata: {
-                type: 'boolean',
-                description:
-                  'Include full metadata in results (used by: all). Default false to reduce token usage.',
-              },
-            },
-            required: ['action'],
+    // ─── Tier 2: Query / Read ─────────────────────────────────────────────
+    {
+      name: 'query_items',
+      description:
+        'Read item data. action: all (list with optional filters), get (by name), multi (batch by names), search (fuzzy text), master_search (across items+things+rules), room_inventory, semantic_path, neighbors, schema.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'all',
+              'get',
+              'multi',
+              'search',
+              'master_search',
+              'room_inventory',
+              'semantic_path',
+              'neighbors',
+              'schema',
+            ],
+          },
+          itemName: { type: 'string', description: 'Used by: get, semantic_path, neighbors' },
+          itemNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Used by: multi',
+          },
+          query: { type: 'string', description: 'Used by: search, master_search' },
+          roomName: { type: 'string', description: 'Used by: room_inventory' },
+          tags: { type: 'string', description: 'Comma-separated tag filter (used by: all)' },
+          type: { type: 'string', description: 'Item type filter (used by: all)' },
+          state: { type: 'string', description: 'State equality filter (used by: all)' },
+          includeMetadata: {
+            type: 'boolean',
+            description:
+              'Include full metadata in results (used by: all). Default false to reduce token usage.',
           },
         },
-        {
-          name: 'query_things',
-          description:
-            'Read thing data. action: all (list all), get (by UID), status (status info).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['all', 'get', 'status'] },
-              thingUID: { type: 'string', description: 'Used by: get, status' },
-            },
-            required: ['action'],
-          },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'query_things',
+      description: 'Read thing data. action: all (list all), get (by UID), status (status info).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['all', 'get', 'status'] },
+          thingUID: { type: 'string', description: 'Used by: get, status' },
         },
-        {
-          name: 'query_rules',
-          description: 'Read automation rules. action: all (list all), get (by UID).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['all', 'get'] },
-              ruleUID: { type: 'string', description: 'Used by: get' },
-            },
-            required: ['action'],
-          },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'query_rules',
+      description: 'Read automation rules. action: all (list all), get (by UID).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['all', 'get'] },
+          ruleUID: { type: 'string', description: 'Used by: get' },
         },
+        required: ['action'],
+      },
+    },
 
-        // ─── Tier 3: CRUD Management ──────────────────────────────────────────
-        {
-          name: 'manage_item',
-          description:
-            'Modify items. action: create_or_update, delete, update_state, add_tag, remove_tag, set_metadata, remove_metadata.' +
-            ' WARNING: Do NOT use create_or_update for semantic model fixes (parentage, hierarchy).' +
-            ' Use remediate action=semantic_fix instead. create_or_update safely merges existing groupNames and tags on update, but semantic relationships (hasLocation, isPointOf, isPartOf) must go through semantic_fix.' +
-            ' WARNING: Do NOT use create_or_update for semantic model fixes (parentage, hierarchy).' +
-            ' Use remediate action=semantic_fix instead. create_or_update safely merges existing groupNames and tags on update, but semantic relationships (hasLocation, isPointOf, isPartOf) must go through semantic_fix.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'create_or_update',
-                  'delete',
-                  'update_state',
-                  'add_tag',
-                  'remove_tag',
-                  'set_metadata',
-                  'remove_metadata',
-                ],
-              },
-              itemName: { type: 'string' },
-              itemData: { type: 'object', description: 'Used by: create_or_update' },
-              state: { type: 'string', description: 'Used by: update_state' },
-              tag: { type: 'string', description: 'Used by: add_tag, remove_tag' },
-              namespace: { type: 'string', description: 'Used by: set_metadata, remove_metadata' },
-              value: { type: 'string', description: 'Used by: set_metadata' },
-              config: { type: 'object', description: 'Used by: set_metadata' },
-            },
-            required: ['action', 'itemName'],
+    // ─── Tier 3: CRUD Management ──────────────────────────────────────────
+    {
+      name: 'manage_item',
+      description:
+        'Modify items. action: create_or_update, delete, update_state, add_tag, remove_tag, set_metadata, remove_metadata.' +
+        ' WARNING: Do NOT use create_or_update for semantic model fixes (parentage, hierarchy).' +
+        ' Use remediate action=semantic_fix instead. create_or_update safely merges existing groupNames and tags on update, but semantic relationships (hasLocation, isPointOf, isPartOf) must go through semantic_fix.' +
+        ' WARNING: Do NOT use create_or_update for semantic model fixes (parentage, hierarchy).' +
+        ' Use remediate action=semantic_fix instead. create_or_update safely merges existing groupNames and tags on update, but semantic relationships (hasLocation, isPointOf, isPartOf) must go through semantic_fix.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'create_or_update',
+              'delete',
+              'update_state',
+              'add_tag',
+              'remove_tag',
+              'set_metadata',
+              'remove_metadata',
+            ],
+          },
+          itemName: { type: 'string' },
+          itemData: { type: 'object', description: 'Used by: create_or_update' },
+          state: { type: 'string', description: 'Used by: update_state' },
+          tag: { type: 'string', description: 'Used by: add_tag, remove_tag' },
+          namespace: { type: 'string', description: 'Used by: set_metadata, remove_metadata' },
+          value: { type: 'string', description: 'Used by: set_metadata' },
+          config: { type: 'object', description: 'Used by: set_metadata' },
+        },
+        required: ['action', 'itemName'],
+      },
+    },
+    {
+      name: 'manage_thing',
+      description: 'Manage things. action: create, update, delete, enable, disable, configure.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['create', 'update', 'delete', 'enable', 'disable', 'configure'],
+          },
+          thingUID: { type: 'string', description: 'Required for all except create' },
+          thingData: { type: 'object', description: 'Used by: create, update' },
+          config: { type: 'object', description: 'Used by: configure' },
+          force: { type: 'boolean', description: 'Used by: delete' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'manage_rule',
+      description: 'Manage automation rules. action: create, update, delete, enable, disable, run.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['create', 'update', 'delete', 'enable', 'disable', 'run'],
+          },
+          ruleUID: { type: 'string', description: 'Required for all except create' },
+          ruleData: { type: 'object', description: 'Used by: create, update' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'manage_link',
+      description:
+        'Manage item-channel links. action: list, link, unlink, configure (apply a link profile).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['list', 'link', 'unlink', 'configure'] },
+          itemName: { type: 'string', description: 'Required for: link, unlink, configure' },
+          channelUID: { type: 'string', description: 'Required for: link, unlink, configure' },
+          config: { type: 'object', description: 'Used by: link' },
+          profile: { type: 'string', description: 'Used by: configure' },
+          profileConfig: { type: 'object', description: 'Used by: configure' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'manage_scene',
+      description:
+        'Named scene management. action: capture (save current item states), activate (restore a saved scene).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['capture', 'activate'] },
+          name: { type: 'string', description: 'Scene name' },
+          itemNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Used by: capture',
           },
         },
-        {
-          name: 'manage_thing',
-          description: 'Manage things. action: create, update, delete, enable, disable, configure.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['create', 'update', 'delete', 'enable', 'disable', 'configure'],
-              },
-              thingUID: { type: 'string', description: 'Required for all except create' },
-              thingData: { type: 'object', description: 'Used by: create, update' },
-              config: { type: 'object', description: 'Used by: configure' },
-              force: { type: 'boolean', description: 'Used by: delete' },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'manage_rule',
-          description:
-            'Manage automation rules. action: create, update, delete, enable, disable, run.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['create', 'update', 'delete', 'enable', 'disable', 'run'],
-              },
-              ruleUID: { type: 'string', description: 'Required for all except create' },
-              ruleData: { type: 'object', description: 'Used by: create, update' },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'manage_link',
-          description:
-            'Manage item-channel links. action: list, link, unlink, configure (apply a link profile).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['list', 'link', 'unlink', 'configure'] },
-              itemName: { type: 'string', description: 'Required for: link, unlink, configure' },
-              channelUID: { type: 'string', description: 'Required for: link, unlink, configure' },
-              config: { type: 'object', description: 'Used by: link' },
-              profile: { type: 'string', description: 'Used by: configure' },
-              profileConfig: { type: 'object', description: 'Used by: configure' },
-            },
-            required: ['action'],
-          },
-        },
-        {
-          name: 'manage_scene',
-          description:
-            'Named scene management. action: capture (save current item states), activate (restore a saved scene).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['capture', 'activate'] },
-              name: { type: 'string', description: 'Scene name' },
-              itemNames: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Used by: capture',
-              },
-            },
-            required: ['action', 'name'],
-          },
-        },
+        required: ['action', 'name'],
+      },
+    },
 
-        // ─── Tier 4: System Services ──────────────────────────────────────────
-        {
-          name: 'manage_logs',
-          description:
-            'OpenHAB log access. Logs are on the remote OpenHAB server — ask the user for the path and call set_folder first. action: set_folder, recent, historical, search.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['set_folder', 'recent', 'historical', 'search'] },
-              folderPath: { type: 'string', description: 'Used by: set_folder' },
-              lines: { type: 'number', description: 'Used by: recent, historical' },
-              search: { type: 'string', description: 'Text filter (used by: historical)' },
-              query: { type: 'string', description: 'Used by: search' },
-              logType: {
-                type: 'string',
-                enum: ['openhab', 'events'],
-                description: 'Used by: search',
-              },
-              maxResults: { type: 'number', description: 'Used by: search' },
-            },
-            required: ['action'],
+    // ─── Tier 4: System Services ──────────────────────────────────────────
+    {
+      name: 'manage_logs',
+      description:
+        'OpenHAB log access. Logs are on the remote OpenHAB server — ask the user for the path and call set_folder first. action: set_folder, recent, historical, search.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['set_folder', 'recent', 'historical', 'search'] },
+          folderPath: { type: 'string', description: 'Used by: set_folder' },
+          lines: { type: 'number', description: 'Used by: recent, historical' },
+          search: { type: 'string', description: 'Text filter (used by: historical)' },
+          query: { type: 'string', description: 'Used by: search' },
+          logType: {
+            type: 'string',
+            enum: ['openhab', 'events'],
+            description: 'Used by: search',
           },
+          maxResults: { type: 'number', description: 'Used by: search' },
         },
-        {
-          name: 'manage_persistence',
-          description:
-            'Persistence data operations. action: services (list), get_data, store_data, statistics, summarize.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: ['services', 'get_data', 'store_data', 'statistics', 'summarize'],
-              },
-              itemName: {
-                type: 'string',
-                description: 'Used by: get_data, store_data, statistics, summarize',
-              },
-              serviceId: {
-                type: 'string',
-                description: 'Persistence service ID (omit for default)',
-              },
-              starttime: { type: 'string', description: 'ISO8601 start time' },
-              endtime: { type: 'string', description: 'ISO8601 end time' },
-              time: { type: 'string', description: 'ISO8601 timestamp (used by: store_data)' },
-              state: { type: 'string', description: 'State value to store (used by: store_data)' },
-            },
-            required: ['action'],
+        required: ['action'],
+      },
+    },
+    {
+      name: 'manage_persistence',
+      description:
+        'Persistence data operations. action: services (list), get_data, store_data, statistics, summarize.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['services', 'get_data', 'store_data', 'statistics', 'summarize'],
           },
-        },
-        {
-          name: 'manage_ui',
-          description:
-            'UI, add-ons, sitemaps, semantic tags, and discovery inbox. action: addons, install_addon, uninstall_addon, sitemaps, sitemap_to_main_ui, ui_components, ui_tiles, generate_widget, semantic_tags, create_tag, update_tag, delete_tag, inbox_list, inbox_approve, inbox_ignore, inbox_unignore.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'addons',
-                  'install_addon',
-                  'uninstall_addon',
-                  'sitemaps',
-                  'sitemap_to_main_ui',
-                  'ui_components',
-                  'ui_tiles',
-                  'generate_widget',
-                  'semantic_tags',
-                  'create_tag',
-                  'update_tag',
-                  'delete_tag',
-                  'inbox_list',
-                  'inbox_approve',
-                  'inbox_ignore',
-                  'inbox_unignore',
-                ],
-              },
-              addonId: { type: 'string', description: 'Used by: install_addon, uninstall_addon' },
-              namespace: { type: 'string', description: 'Used by: ui_components (e.g. ui:pages)' },
-              itemName: { type: 'string', description: 'Used by: generate_widget' },
-              sitemapName: { type: 'string', description: 'Used by: sitemap_to_main_ui' },
-              tagId: { type: 'string', description: 'Used by: update_tag, delete_tag' },
-              tagData: { type: 'object', description: 'Used by: create_tag, update_tag' },
-              thingUID: {
-                type: 'string',
-                description: 'Used by: inbox_approve, inbox_ignore, inbox_unignore',
-              },
-              label: { type: 'string', description: 'Used by: inbox_approve' },
-              newThingId: { type: 'string', description: 'Used by: inbox_approve' },
-            },
-            required: ['action'],
+          itemName: {
+            type: 'string',
+            description: 'Used by: get_data, store_data, statistics, summarize',
           },
-        },
-        {
-          name: 'manage_system',
-          description:
-            'System config, loggers, voice/audio, and binding scans. action: system_info, services, service_config_get, service_config_update, logger_list, logger_set, transformations, templates, trigger_scan, voice_say, voice_interpret, voices, audio_sinks, audio_sources, habot.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'system_info',
-                  'services',
-                  'service_config_get',
-                  'service_config_update',
-                  'logger_list',
-                  'logger_set',
-                  'transformations',
-                  'templates',
-                  'trigger_scan',
-                  'voice_say',
-                  'voice_interpret',
-                  'voices',
-                  'audio_sinks',
-                  'audio_sources',
-                  'habot',
-                ],
-              },
-              serviceId: {
-                type: 'string',
-                description: 'Used by: service_config_get, service_config_update',
-              },
-              config: { type: 'object', description: 'Used by: service_config_update' },
-              loggerName: { type: 'string', description: 'Used by: logger_set' },
-              level: { type: 'string', description: 'Used by: logger_set' },
-              bindingId: { type: 'string', description: 'Used by: trigger_scan (e.g. hue, sonos)' },
-              text: { type: 'string', description: 'Used by: voice_say, voice_interpret, habot' },
-              sinkId: { type: 'string', description: 'Used by: voice_say' },
-              interpreterIds: { type: 'string', description: 'Used by: voice_interpret' },
-            },
-            required: ['action'],
+          serviceId: {
+            type: 'string',
+            description: 'Persistence service ID (omit for default)',
           },
+          starttime: { type: 'string', description: 'ISO8601 start time' },
+          endtime: { type: 'string', description: 'ISO8601 end time' },
+          time: { type: 'string', description: 'ISO8601 timestamp (used by: store_data)' },
+          state: { type: 'string', description: 'State value to store (used by: store_data)' },
         },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'manage_ui',
+      description:
+        'UI, add-ons, sitemaps, semantic tags, and discovery inbox. action: addons, install_addon, uninstall_addon, sitemaps, sitemap_to_main_ui, ui_components, ui_tiles, generate_widget, semantic_tags, create_tag, update_tag, delete_tag, inbox_list, inbox_approve, inbox_ignore, inbox_unignore.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'addons',
+              'install_addon',
+              'uninstall_addon',
+              'sitemaps',
+              'sitemap_to_main_ui',
+              'ui_components',
+              'ui_tiles',
+              'generate_widget',
+              'semantic_tags',
+              'create_tag',
+              'update_tag',
+              'delete_tag',
+              'inbox_list',
+              'inbox_approve',
+              'inbox_ignore',
+              'inbox_unignore',
+            ],
+          },
+          addonId: { type: 'string', description: 'Used by: install_addon, uninstall_addon' },
+          namespace: { type: 'string', description: 'Used by: ui_components (e.g. ui:pages)' },
+          itemName: { type: 'string', description: 'Used by: generate_widget' },
+          sitemapName: { type: 'string', description: 'Used by: sitemap_to_main_ui' },
+          tagId: { type: 'string', description: 'Used by: update_tag, delete_tag' },
+          tagData: { type: 'object', description: 'Used by: create_tag, update_tag' },
+          thingUID: {
+            type: 'string',
+            description: 'Used by: inbox_approve, inbox_ignore, inbox_unignore',
+          },
+          label: { type: 'string', description: 'Used by: inbox_approve' },
+          newThingId: { type: 'string', description: 'Used by: inbox_approve' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'manage_system',
+      description:
+        'System config, loggers, voice/audio, and binding scans. action: system_info, services, service_config_get, service_config_update, logger_list, logger_set, transformations, templates, trigger_scan, voice_say, voice_interpret, voices, audio_sinks, audio_sources, habot.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'system_info',
+              'services',
+              'service_config_get',
+              'service_config_update',
+              'logger_list',
+              'logger_set',
+              'transformations',
+              'templates',
+              'trigger_scan',
+              'voice_say',
+              'voice_interpret',
+              'voices',
+              'audio_sinks',
+              'audio_sources',
+              'habot',
+            ],
+          },
+          serviceId: {
+            type: 'string',
+            description: 'Used by: service_config_get, service_config_update',
+          },
+          config: { type: 'object', description: 'Used by: service_config_update' },
+          loggerName: { type: 'string', description: 'Used by: logger_set' },
+          level: { type: 'string', description: 'Used by: logger_set' },
+          bindingId: { type: 'string', description: 'Used by: trigger_scan (e.g. hue, sonos)' },
+          text: { type: 'string', description: 'Used by: voice_say, voice_interpret, habot' },
+          sinkId: { type: 'string', description: 'Used by: voice_say' },
+          interpreterIds: { type: 'string', description: 'Used by: voice_interpret' },
+        },
+        required: ['action'],
+      },
+    },
 
-        // ─── Tier 5: Intelligence & Analysis ──────────────────────────────────
-        {
-          name: 'analyze_home',
-          description:
-            'Home-wide analysis. action: health (offline + battery), safety_audit, energy, stale_items, orphans (broken links),' +
-            ' semantic_audit (returns structured SemanticIssue objects with issue type + safeFix suggestions — same logic as the OpenHAB MainUI model page),' +
-            ' rule_conflicts, find_equipment (by room + type), voice_exposure (Google/Alexa mappings).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'health',
-                  'safety_audit',
-                  'energy',
-                  'stale_items',
-                  'orphans',
-                  'semantic_audit',
-                  'rule_conflicts',
-                  'find_equipment',
-                  'voice_exposure',
-                ],
-              },
-              days: {
-                type: 'number',
-                description: 'Staleness threshold in days (used by: stale_items)',
-              },
-              roomName: { type: 'string', description: 'Used by: find_equipment' },
-              equipmentType: {
-                type: 'string',
-                description: 'Semantic keyword e.g. Light, Lock (used by: find_equipment)',
-              },
-            },
-            required: ['action'],
+    // ─── Tier 5: Intelligence & Analysis ──────────────────────────────────
+    {
+      name: 'analyze_home',
+      description:
+        'Home-wide analysis. action: health (offline + battery), safety_audit, energy, stale_items, orphans (broken links),' +
+        ' semantic_audit (returns structured SemanticIssue objects with issue type + safeFix suggestions — same logic as the OpenHAB MainUI model page),' +
+        ' rule_conflicts, find_equipment (by room + type), voice_exposure (Google/Alexa mappings).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'health',
+              'safety_audit',
+              'energy',
+              'stale_items',
+              'orphans',
+              'semantic_audit',
+              'rule_conflicts',
+              'find_equipment',
+              'voice_exposure',
+            ],
+          },
+          days: {
+            type: 'number',
+            description: 'Staleness threshold in days (used by: stale_items)',
+          },
+          roomName: { type: 'string', description: 'Used by: find_equipment' },
+          equipmentType: {
+            type: 'string',
+            description: 'Semantic keyword e.g. Light, Lock (used by: find_equipment)',
           },
         },
-        {
-          name: 'diagnose_item',
-          description:
-            'Item diagnostics. action: explain (forensic state + rules + history), topology (Mermaid home graph).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['explain', 'topology'] },
-              itemName: { type: 'string', description: 'Required for: explain' },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'diagnose_item',
+      description:
+        'Item diagnostics. action: explain (forensic state + rules + history), topology (Mermaid home graph).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['explain', 'topology'] },
+          itemName: { type: 'string', description: 'Required for: explain' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'automation',
+      description:
+        'Automation generation and testing. action: generate_rule (from NL), discover_patterns (temporal correlation), shadow_run (dry-run preview), simulate (predict outcome + rule chains), validate_rule (JS syntax check).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['generate_rule', 'discover_patterns', 'shadow_run', 'simulate', 'validate_rule'],
+          },
+          intent: {
+            type: 'string',
+            description: 'Natural language rule intent (used by: generate_rule)',
+          },
+          itemName: { type: 'string', description: 'Used by: simulate, discover_patterns' },
+          correlatedItemName: { type: 'string', description: 'Used by: discover_patterns' },
+          command: { type: 'string', description: 'Used by: simulate' },
+          commands: {
+            type: 'array',
+            description: 'Used by: shadow_run',
+            items: {
+              type: 'object',
+              properties: { itemName: { type: 'string' }, command: { type: 'string' } },
+              required: ['itemName', 'command'],
             },
-            required: ['action'],
+          },
+          script: { type: 'string', description: 'JS to validate (used by: validate_rule)' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'remediate',
+      description:
+        'Bulk remediation and generation.' +
+        ' action: bulk_update (batch tags/groups), create_equipment (auto-provision from thing), suggest_tags, standardize_naming, optimize_persistence, export_snapshot, boilerplate (TS types).' +
+        " semantic_fix: safely fix ONE item's semantic parent without touching other fields or groupNames \u2014 uses targeted REST endpoints (metadata only + additive group)." +
+        ' semantic_fix_all: run full audit and auto-apply all safely fixable issues (dryRun=true for preview).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: [
+              'bulk_update',
+              'create_equipment',
+              'suggest_tags',
+              'standardize_naming',
+              'optimize_persistence',
+              'export_snapshot',
+              'boilerplate',
+              'semantic_fix',
+              'semantic_fix_all',
+            ],
+          },
+          itemNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Used by: bulk_update',
+          },
+          updates: {
+            type: 'object',
+            description: 'Used by: bulk_update',
+            properties: {
+              tags: { type: 'array', items: { type: 'string' } },
+              category: { type: 'string' },
+              groupNames: { type: 'array', items: { type: 'string' } },
+            },
+          },
+          thingUID: { type: 'string', description: 'Used by: create_equipment' },
+          roomGroup: {
+            type: 'string',
+            description: 'Target location group (used by: create_equipment)',
+          },
+          itemName: { type: 'string', description: 'Used by: suggest_tags, semantic_fix' },
+          parentName: {
+            type: 'string',
+            description: 'Name of the parent item to link to (used by: semantic_fix)',
+          },
+          parentRelation: {
+            type: 'string',
+            enum: ['hasLocation', 'isPartOf', 'isPointOf'],
+            description: 'Semantic relationship key (used by: semantic_fix)',
+          },
+          addTag: {
+            type: 'string',
+            description:
+              'Tag to add to the item (used by: semantic_fix as an alternative to parentName)',
+          },
+          dryRun: {
+            type: 'boolean',
+            description:
+              'Preview changes without applying them (used by: semantic_fix, semantic_fix_all)',
           },
         },
-        {
-          name: 'automation',
-          description:
-            'Automation generation and testing. action: generate_rule (from NL), discover_patterns (temporal correlation), shadow_run (dry-run preview), simulate (predict outcome + rule chains), validate_rule (JS syntax check).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'generate_rule',
-                  'discover_patterns',
-                  'shadow_run',
-                  'simulate',
-                  'validate_rule',
-                ],
-              },
-              intent: {
-                type: 'string',
-                description: 'Natural language rule intent (used by: generate_rule)',
-              },
-              itemName: { type: 'string', description: 'Used by: simulate, discover_patterns' },
-              correlatedItemName: { type: 'string', description: 'Used by: discover_patterns' },
-              command: { type: 'string', description: 'Used by: simulate' },
-              commands: {
-                type: 'array',
-                description: 'Used by: shadow_run',
-                items: {
-                  type: 'object',
-                  properties: { itemName: { type: 'string' }, command: { type: 'string' } },
-                  required: ['itemName', 'command'],
-                },
-              },
-              script: { type: 'string', description: 'JS to validate (used by: validate_rule)' },
-            },
-            required: ['action'],
+        required: ['action'],
+      },
+    },
+    {
+      name: 'control_media',
+      description:
+        'Control a media player equipment item. action: play, pause, next, previous, volume_up, volume_down.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          equipmentName: {
+            type: 'string',
+            description: 'Name or label of the media player equipment group',
+          },
+          action: {
+            type: 'string',
+            enum: ['play', 'pause', 'next', 'previous', 'volume_up', 'volume_down'],
           },
         },
-        {
-          name: 'remediate',
-          description:
-            'Bulk remediation and generation.' +
-            ' action: bulk_update (batch tags/groups), create_equipment (auto-provision from thing), suggest_tags, standardize_naming, optimize_persistence, export_snapshot, boilerplate (TS types).' +
-            " semantic_fix: safely fix ONE item's semantic parent without touching other fields or groupNames \u2014 uses targeted REST endpoints (metadata only + additive group)." +
-            ' semantic_fix_all: run full audit and auto-apply all safely fixable issues (dryRun=true for preview).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: {
-                type: 'string',
-                enum: [
-                  'bulk_update',
-                  'create_equipment',
-                  'suggest_tags',
-                  'standardize_naming',
-                  'optimize_persistence',
-                  'export_snapshot',
-                  'boilerplate',
-                  'semantic_fix',
-                  'semantic_fix_all',
-                ],
-              },
-              itemNames: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Used by: bulk_update',
-              },
-              updates: {
-                type: 'object',
-                description: 'Used by: bulk_update',
-                properties: {
-                  tags: { type: 'array', items: { type: 'string' } },
-                  category: { type: 'string' },
-                  groupNames: { type: 'array', items: { type: 'string' } },
-                },
-              },
-              thingUID: { type: 'string', description: 'Used by: create_equipment' },
-              roomGroup: {
-                type: 'string',
-                description: 'Target location group (used by: create_equipment)',
-              },
-              itemName: { type: 'string', description: 'Used by: suggest_tags, semantic_fix' },
-              parentName: {
-                type: 'string',
-                description: 'Name of the parent item to link to (used by: semantic_fix)',
-              },
-              parentRelation: {
-                type: 'string',
-                enum: ['hasLocation', 'isPartOf', 'isPointOf'],
-                description: 'Semantic relationship key (used by: semantic_fix)',
-              },
-              addTag: {
-                type: 'string',
-                description:
-                  'Tag to add to the item (used by: semantic_fix as an alternative to parentName)',
-              },
-              dryRun: {
-                type: 'boolean',
-                description:
-                  'Preview changes without applying them (used by: semantic_fix, semantic_fix_all)',
-              },
-            },
-            required: ['action'],
-          },
+        required: ['equipmentName', 'action'],
+      },
+    },
+    {
+      name: 'mcp_status',
+      description:
+        'MCP server metadata. action: health (SSE/cache metrics), capabilities, prompt_context (AI priming context for this home).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['health', 'capabilities', 'prompt_context'] },
         },
-        {
-          name: 'control_media',
-          description:
-            'Control a media player equipment item. action: play, pause, next, previous, volume_up, volume_down.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              equipmentName: {
-                type: 'string',
-                description: 'Name or label of the media player equipment group',
-              },
-              action: {
-                type: 'string',
-                enum: ['play', 'pause', 'next', 'previous', 'volume_up', 'volume_down'],
-              },
-            },
-            required: ['equipmentName', 'action'],
-          },
-        },
-        {
-          name: 'mcp_status',
-          description:
-            'MCP server metadata. action: health (SSE/cache metrics), capabilities, prompt_context (AI priming context for this home).',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['health', 'capabilities', 'prompt_context'] },
-            },
-            required: ['action'],
-          },
-        },
-      ],
-    };
-  });
+        required: ['action'],
+      },
+    },
+  ];
 
-  server.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+  const readOnlyTools = new Set([
+    'initial_discovery',
+    'get_system_summary',
+    'resolve_item',
+    'query_items',
+    'query_things',
+    'query_rules',
+    'analyze_home',
+    'diagnose_item',
+    'automation',
+    'mcp_status',
+  ]);
 
+  const executeTool = async (name: string, args: unknown) => {
     try {
       let result: unknown;
 
@@ -1365,22 +1374,37 @@ export function registerTools(server: McpServer, client: OpenHabClient) {
       return {
         content: [
           {
-            type: 'text',
-            text: typeof result === 'string' ? result : JSON.stringify(result),
+            type: 'text' as const,
+            text: typeof result === 'string' ? result : JSON.stringify(result ?? null),
           },
         ],
+        structuredContent: { result: result ?? null },
       };
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         content: [
           {
-            type: 'text',
+            type: 'text' as const,
             text: `Error executing tool ${name}: ${errorMessage}`,
           },
         ],
-        isError: true,
+        isError: true as const,
+        structuredContent: { error: errorMessage },
       };
     }
-  });
+  };
+
+  for (const tool of toolDefinitions) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: fromJsonSchema(tool.inputSchema),
+        outputSchema: toolOutputSchema,
+        ...(readOnlyTools.has(tool.name) ? { annotations: { readOnlyHint: true } } : {}),
+      },
+      async (args) => executeTool(tool.name, args)
+    );
+  }
 }
