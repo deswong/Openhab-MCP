@@ -1,40 +1,22 @@
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { OpenHabClient } from './openhab-client.js';
 import { registerTools } from './tools.js';
 
-async function main() {
-  const openhabUrl = process.env.OPENHAB_URL;
-  const apiToken = process.env.OPENHAB_API_TOKEN;
+const openhabUrl = process.env.OPENHAB_URL;
+const apiToken = process.env.OPENHAB_API_TOKEN;
 
-  // We enforce settings via Env variables
-  if (!openhabUrl || !apiToken) {
-    console.error('Error: OPENHAB_URL and OPENHAB_API_TOKEN environment variables are required.');
-    console.error(
-      'Example: OPENHAB_URL=http://openhab.localdomain:8080 OPENHAB_API_TOKEN=oh.mytoken node dist/index.js'
-    );
-    process.exit(1);
-  }
+if (!openhabUrl || !apiToken) {
+  console.error('Error: OPENHAB_URL and OPENHAB_API_TOKEN environment variables are required.');
+  console.error(
+    'Example: OPENHAB_URL=http://openhab.localdomain:8080 OPENHAB_API_TOKEN=oh.mytoken node dist/index.js'
+  );
+  process.exit(1);
+}
 
+function createServer(openhabUrl: string, apiToken: string): McpServer {
   // Set up MCP Server
-  const server = new McpServer({ name: 'openhab-mcp', version: '1.0.0' }, {
-    // Advertise explicit capabilities so MCP clients (and different LLM runtimes)
-    // can discover available resources and tool calling support. Some model
-    // implementations (e.g. newer models in VS Code) require richer capability
-    // metadata to enable tool/resource usage.
-    capabilities: {
-      resources: {
-        subscribe: true,
-        templates: true,
-        list: true,
-      },
-      tools: {
-        list: true,
-        call: true,
-        schemas: true,
-      },
-    },
-  } as any);
+  const server = new McpServer({ name: 'openhab-mcp', version: '1.0.0' });
 
   // Initialize Client
   const client = new OpenHabClient(openhabUrl, apiToken);
@@ -212,17 +194,15 @@ async function main() {
   // Register Tools
   registerTools(server, client);
 
-  // Use stdio for communication with MCP Clients
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-
-  // This appears immediately in the client — before the background warm-up finishes
-  console.error(
-    `[OpenHAB MCP] Server connected to ${openhabUrl} — cache warm-up running in background.`
-  );
+  console.error(`[OpenHAB MCP] Server ready for ${openhabUrl}; cache warm-up runs in background.`);
+  return server;
 }
 
-main().catch((error) => {
+try {
+  serveStdio(() => createServer(openhabUrl, apiToken), {
+    onerror: (error) => console.error('Fatal MCP transport error:', error),
+  });
+} catch (error) {
   console.error('Fatal error:', error);
-  process.exit(1);
-});
+  process.exitCode = 1;
+}
