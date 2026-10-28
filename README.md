@@ -259,9 +259,9 @@ Tools designed to automate complex workflows and provide AI-friendly context.
 
 MIT
 
-## Release 1.4.0
+## Release 1.4.1
 
-This release (1.4.0) contains token usage optimizations to reduce cost, non-blocking asynchronous log parsing, pre-compiled schemas, and SSE reconnect auto-cache invalidation. See [CHANGELOG.md](CHANGELOG.md) for full details.
+This release (1.4.1) fixes HTTP 400 errors when creating item-channel links or applying link profiles, and raises minimum MCP SDK and Axios versions to patched releases. See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## Contributing
 

@@ -2,11 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.4.1] - 2026-10-29
 
 ### Fixed
 
 - **Item-channel links**: Include the item name and channel UID in link and profile update payloads to satisfy OpenHAB REST validation and avoid HTTP 400 responses.
+- **Release package**: Exclude compiled test files from the production build output.
 
 ### Security
 
