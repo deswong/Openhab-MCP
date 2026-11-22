@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type MockInstance } from 'vitest';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { OpenHabClient } from '../openhab-client.js';
 import { registerTools } from '../tools.js';
 
@@ -10,17 +10,11 @@ describe('MCP Tools Integration', () => {
 
   beforeEach(() => {
     mockServer = {
-      server: {
-        setRequestHandler: vi.fn(
-          (_schema: unknown, handler: (arg: unknown) => Promise<unknown>) => {
-            if (handler.length === 0) {
-              toolHandlers['list_tools'] = handler;
-            } else {
-              toolHandlers['call_tool'] = handler;
-            }
-          }
-        ),
-      },
+      registerTool: vi.fn(
+        (name: string, _config: unknown, handler: (arg: unknown) => Promise<unknown>) => {
+          toolHandlers[name] = handler;
+        }
+      ),
     } as unknown as McpServer;
 
     const mockMethod = () => vi.fn().mockResolvedValue('ok');
@@ -504,37 +498,45 @@ describe('MCP Tools Integration', () => {
 
     testCases.forEach(({ tool, args, clientMethod, expectedArgs }) => {
       it(`should dispatch ${tool} to client.${clientMethod}`, async () => {
-        await toolHandlers['call_tool']({
-          params: { name: tool, arguments: args },
-        });
+        await toolHandlers[tool](args);
         expect(
           (mockClient as unknown as Record<string, MockInstance>)[clientMethod]
         ).toHaveBeenCalledWith(...expectedArgs);
       });
     });
 
-    it('should return error for unknown tool', async () => {
-      const result = (await toolHandlers['call_tool']({
-        params: { name: 'unknown_tool', arguments: {} },
-      })) as { isError?: boolean; content: Array<{ text: string }> };
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('Unknown tool');
+    it('should register tool handlers through the SDK', () => {
+      expect(mockServer.registerTool).toHaveBeenCalled();
+      expect(toolHandlers.query_items).toBeTypeOf('function');
+    });
+
+    it('should provide structured content alongside readable text', async () => {
+      const result = (await toolHandlers.get_system_summary({})) as {
+        content: Array<{ text: string }>;
+        structuredContent: { result: unknown };
+      };
+
+      expect(result.content[0].text).toBe('ok');
+      expect(result.structuredContent.result).toBe('ok');
     });
 
     it('should handle tool execution errors', async () => {
       vi.mocked(mockClient.getItem).mockRejectedValue(new Error('API Failure'));
-      const result = (await toolHandlers['call_tool']({
-        params: { name: 'query_items', arguments: { action: 'get', itemName: 'i' } },
-      })) as { isError?: boolean; content: Array<{ text: string }> };
+      const result = (await toolHandlers.query_items({ action: 'get', itemName: 'i' })) as {
+        isError?: boolean;
+        content: Array<{ text: string }>;
+      };
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('Error executing tool query_items: API Failure');
+      expect(result.structuredContent.error).toBe('API Failure');
     });
 
     it('should handle non-Error rejections', async () => {
       vi.mocked(mockClient.getItem).mockRejectedValue('String Failure');
-      const result = (await toolHandlers['call_tool']({
-        params: { name: 'query_items', arguments: { action: 'get', itemName: 'i' } },
-      })) as { isError?: boolean; content: Array<{ text: string }> };
+      const result = (await toolHandlers.query_items({ action: 'get', itemName: 'i' })) as {
+        isError?: boolean;
+        content: Array<{ text: string }>;
+      };
       expect(result.content[0].text).toContain('Error executing tool query_items: String Failure');
     });
   });

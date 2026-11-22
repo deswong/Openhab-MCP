@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **MCP SDK v2**: Replace the v1 SDK with the split v2 server package and require Node.js 20 or newer.
+- **Protocol compatibility**: Serve both the 2026-07-28 MCP revision and legacy 2025-era clients over stdio.
+
+### Added
+
+- **Structured tool results**: Return validated structured content alongside readable text, with read-only hints for query tools.
+
 ## [1.4.1] - 2026-10-29
 
 ### Fixed

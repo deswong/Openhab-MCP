@@ -29,9 +29,38 @@ describe('OpenHabClient', () => {
       expect(await client.getItem('Item1')).toEqual({ name: 'Item1' });
     });
 
+    it('should preserve requested order and omit missing items in a multi-fetch', async () => {
+      mock.onGet(`${baseUrl}/rest/items`).reply(200, [
+        { name: 'Item2', state: 'OFF' },
+        { name: 'Item1', state: 'ON' },
+      ]);
+
+      const items = await client.getMultiItems(['Item1', 'Missing', 'Item2']);
+
+      expect(items.map((item) => item.name)).toEqual(['Item1', 'Item2']);
+    });
+
     it('should send a command', async () => {
       mock.onPost(`${baseUrl}/rest/items/Item1`).reply(200, 'OK');
       expect(await client.sendCommand('Item1', 'ON')).toBe('OK');
+    });
+
+    it('should keep cached item state fresh after sending a command', async () => {
+      mock
+        .onGet(`${baseUrl}/rest/items`)
+        .reply(200, [{ name: 'Item1', type: 'Switch', state: 'OFF', tags: [], groupNames: [] }]);
+      mock.onGet(`${baseUrl}/rest/items/Item1`).reply(200, {
+        name: 'Item1',
+        type: 'Switch',
+        state: 'OFF',
+      });
+      mock.onPost(`${baseUrl}/rest/items/Item1`).reply(200, 'OK');
+
+      await client.getItems();
+      await client.sendCommand('Item1', 'ON');
+
+      await expect(client.getItem('Item1')).resolves.toMatchObject({ state: 'ON' });
+      expect(mock.history.get.some((request) => request.url === '/rest/items/Item1')).toBe(false);
     });
 
     it('should fetch persistence data with parameters', async () => {

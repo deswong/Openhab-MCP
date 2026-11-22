@@ -5,6 +5,9 @@ import fs from 'fs';
  * fully asynchronous to prevent blocking the event loop.
  */
 export async function readLastLines(filePath: string, maxLines: number): Promise<string[]> {
+  const lineLimit = Number.isFinite(maxLines) ? Math.floor(maxLines) : 0;
+  if (lineLimit <= 0) return [];
+
   let fileHandle: fs.promises.FileHandle | null = null;
   try {
     const exists = await fs.promises
@@ -22,7 +25,7 @@ export async function readLastLines(filePath: string, maxLines: number): Promise
     let lines: string[] = [];
     let position = fileSize;
 
-    while (lines.length <= maxLines && position > 0) {
+    while (lines.length <= lineLimit && position > 0) {
       const readSize = Math.min(position, bufferSize);
       position -= readSize;
       await fileHandle.read(buffer, 0, readSize, position);
@@ -39,7 +42,7 @@ export async function readLastLines(filePath: string, maxLines: number): Promise
       lines = [...chunkLines, ...lines];
     }
 
-    return lines.slice(-maxLines).filter((l) => l.trim().length > 0);
+    return lines.slice(-lineLimit).filter((l) => l.trim().length > 0);
   } catch (error) {
     console.error(`[LogParser] Error reading ${filePath}:`, error);
     return [];
