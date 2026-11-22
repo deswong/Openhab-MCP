@@ -84,7 +84,7 @@ export class OpenHabClient {
     this.client = axios.create({
       baseURL: baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl,
       headers: {
-        Authorization: `Bearer ${apiToken}`,
+        'X-OPENHAB-TOKEN': apiToken,
         Accept: 'application/json',
         'Content-Type': 'application/json',
         'Accept-Encoding': 'gzip, deflate, br',
