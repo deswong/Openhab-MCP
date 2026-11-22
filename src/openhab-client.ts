@@ -194,6 +194,7 @@ export class OpenHabClient {
       const response = await this.client.get('/rest/events', {
         responseType: 'stream',
         signal: this.abortController.signal,
+        timeout: 0,
       });
 
       if (this.sseConnectedOnce) {
@@ -370,12 +371,46 @@ export class OpenHabClient {
     this.log('Invalidating global items cache');
     this.cache.delete('items_all');
     this.cache.delete('items_all_meta');
+    this.invalidateFilteredItemCaches();
+  }
+
+  private invalidateFilteredItemCaches(): void {
     // Also clear any filtered item cache keys (e.g. items_Switch_...) so
     // stale results don't linger after an item is added, modified, or removed.
     for (const key of this.filteredCacheKeys) {
       this.cache.delete(key);
     }
     this.filteredCacheKeys.clear();
+  }
+
+  private patchItemState(itemName: string, state: string): void {
+    const now = Date.now();
+    const expiry = now + this.ITEM_CACHE_TTL;
+    const indexedItem = this.semanticIndex.itemMap.get(itemName);
+    if (indexedItem) indexedItem.state = state;
+
+    const cachedItem = this.cache.get(`item_${itemName}`);
+    if (cachedItem && cachedItem.expiry > now) {
+      (cachedItem.data as OpenHabItem).state = state;
+      cachedItem.expiry = expiry;
+    } else if (indexedItem) {
+      this.cache.set(`item_${itemName}`, { data: indexedItem, expiry });
+    }
+
+    for (const cacheKey of ['items_all', 'items_all_meta']) {
+      const cachedItems = this.cache.get(cacheKey);
+      if (!cachedItems || cachedItems.expiry <= now) continue;
+
+      const item = (cachedItems.data as OpenHabItem[]).find(
+        (candidate) => candidate.name === itemName
+      );
+      if (item) {
+        item.state = state;
+        cachedItems.expiry = expiry;
+      }
+    }
+
+    this.invalidateFilteredItemCaches();
   }
 
   // ---------------------------------------------------------------------------
@@ -562,7 +597,7 @@ export class OpenHabClient {
         : 'items_all';
 
     // Track non-default keys so targeted invalidation can clear them on item changes.
-    if (cacheKey !== 'items_all') {
+    if (cacheKey !== 'items_all' && cacheKey !== 'items_all_meta') {
       this.filteredCacheKeys.add(cacheKey);
     }
 
@@ -662,9 +697,11 @@ export class OpenHabClient {
       }
     }
 
-    // Restore original requested order
-    const nameIndex = new Map(results.map((i, idx) => [i.name, idx]));
-    return itemNames.map((n) => results[nameIndex.get(n) ?? 0]).filter(Boolean);
+    // Restore requested order while omitting names the API did not return.
+    const resultsByName = new Map(results.map((item) => [item.name, item]));
+    return itemNames
+      .map((name) => resultsByName.get(name))
+      .filter((item): item is OpenHabItem => item !== undefined);
   }
 
   async sendCommand(itemName: string, command: string): Promise<string> {
@@ -712,23 +749,11 @@ export class OpenHabClient {
       // Ignore fetch errors, proceed with raw command
     }
 
-    this.invalidateItemCache(itemName);
     const response = await this.client.post(`/rest/items/${itemName}`, processedCommand, {
       headers: { 'Content-Type': 'text/plain', Accept: '*/*' },
     });
 
-    // Optimization: Optimistic cache patch — update the known state immediately so
-    // subsequent reads within the same session see the new value without a round-trip.
-    const optimisticState = processedCommand;
-    const cachedItem = this.cache.get(`item_${itemName}`);
-    if (cachedItem) {
-      (cachedItem.data as OpenHabItem).state = optimisticState;
-    }
-    const allCached = this.cache.get('items_all');
-    if (allCached) {
-      const itemInAll = (allCached.data as OpenHabItem[]).find((i) => i.name === itemName);
-      if (itemInAll) itemInAll.state = optimisticState;
-    }
+    this.patchItemState(itemName, processedCommand);
 
     return response.data;
   }
@@ -2320,8 +2345,8 @@ config:
       if (!this.enableSSE) return ['SSE Event stream is disabled. Enable it to buffer logs.'];
       return ['No events buffered yet. Waiting for system activity...'];
     }
-    const safeLines = Math.min(lines, 100); // Standard recent logs remain small
-    return this.eventLogBuffer.slice(-safeLines);
+    const safeLines = Number.isFinite(lines) ? Math.max(0, Math.min(Math.floor(lines), 100)) : 0;
+    return this.eventLogBuffer.slice(this.eventLogBuffer.length - safeLines);
   }
 
   /**
@@ -2340,8 +2365,10 @@ config:
       logs = logs.filter((l) => l.toLowerCase().includes(query));
     }
 
-    const safeLines = Math.min(lines, this.MAX_LOG_BUFFER);
-    return logs.slice(-safeLines);
+    const safeLines = Number.isFinite(lines)
+      ? Math.max(0, Math.min(Math.floor(lines), this.MAX_LOG_BUFFER))
+      : 0;
+    return logs.slice(logs.length - safeLines);
   }
 
   /**
@@ -2378,7 +2405,8 @@ config:
       results = results.map((l) => normalizeEventLog(l) || l);
     }
 
-    return results.slice(-maxResults);
+    const safeResults = Number.isFinite(maxResults) ? Math.max(0, Math.floor(maxResults)) : 0;
+    return results.slice(results.length - safeResults);
   }
 
   /**

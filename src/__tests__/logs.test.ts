@@ -58,6 +58,18 @@ describe('OpenHabClient Logs', () => {
     expect(filtered[0]).toContain('Critical Error');
   });
 
+  it('should return no logs for zero or negative limits', async () => {
+    const clientAny = client as unknown as {
+      addLogToBuffer: (log: string) => void;
+    };
+    clientAny.addLogToBuffer('Log entry');
+
+    await expect(client.getRecentLogs(0)).resolves.toEqual([]);
+    await expect(client.getRecentLogs(-1)).resolves.toEqual([]);
+    await expect(client.getHistoricalLogs(0)).resolves.toEqual([]);
+    await expect(client.getHistoricalLogs(-1)).resolves.toEqual([]);
+  });
+
   it('should respect the log buffer limits', async () => {
     const clientAny = client as unknown as {
       addLogToBuffer: (log: string) => void;

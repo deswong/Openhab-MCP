@@ -35,6 +35,14 @@ The server requires two environment variables:
    OPENHAB_URL=http://openhab:8080 OPENHAB_API_TOKEN=your_token_here npm start
    ```
 
+## Runtime behavior
+
+- The OpenHAB event stream is long-lived and is not subject to the regular 10-second API request timeout.
+- `query_items` with `action: "multi"` returns found items in the requested order and omits names that OpenHAB did not return.
+- `manage_logs` with `action: "recent"` or `"historical"` returns no entries for a zero or negative line limit. Recent results are capped at 100; historical results are capped at the event buffer size.
+- After a successful `send_command`, cached item state is updated and filtered item results are invalidated.
+- The VS Code **Launch (built) Program** configuration builds before launch. If starting with `npm start`, run `npm run build` first so `dist/` contains the latest source.
+
 ## Client Integration
 
 ### Claude Desktop
